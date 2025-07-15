@@ -67,7 +67,7 @@ export class VideoGenerator {
             width: this.videoWidth,
             height: this.videoHeight,
             framerate: fps,
-            bitrate: 1000000,
+            bitrate: 8000000,
         };
         const support = await VideoEncoder.isConfigSupported(encoderConfig);
         if (!support.supported) {
