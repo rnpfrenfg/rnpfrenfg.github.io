@@ -2,62 +2,61 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Image to Video Converter</title>
-  <style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image to Video Converter</title>
+<style>
     body {
-      font-family: Arial, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 20px;
+        font-family: Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 20px;
     }
     #preview {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 20px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 20px;
     }
     .preview-image {
-      max-width: 200px;
-      max-height: 200px;
-      object-fit: contain;
-      border: 1px solid #ccc;
+        max-width: 200px;
+        max-height: 200px;
+        object-fit: contain;
+        border: 1px solid #ccc;
     }
     #canvas {
-      max-width: 400px;
-      max-height: 400px;
-      border: 2px solid #333;
-      margin-top: 20px;
+        max-width: 400px;
+        max-height: 400px;
+        border: 2px solid #333;
+        margin-top: 20px;
     }
     #error {
-      color: red;
-      margin-top: 10px;
+        color: red;
+        margin-top: 10px;
     }
     #downloadLink {
-      margin-top: 20px;
-      padding: 10px 20px;
-      background-color: #007bff;
-      color: white;
-      text-decoration: none;
-      border-radius: 5px;
-      display: none;
+        margin-top: 20px;
+        padding: 10px 20px;
+        background-color: #007bff;
+        color: white;
+        text-decoration: none;
+        border-radius: 5px;
+        display: none;
     }
-  </style>
+</style>
 </head>
 <body>
-  <h1>이미지 업로드 및 영상 생성</h1>
-  <input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" multiple>
-  <button id="createVideo" disabled>영상 생성</button>
-  <div id="preview"></div>
-  <canvas id="canvas"></canvas>
-  <div id="error"></div>
-  <a id="downloadLink" href="#" download="slideshow.mp4">영상 다운로드</a>
+<h1>이미지 업로드 및 영상 생성</h1>
+<input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" multiple>
+<button id="createVideo" disabled>영상 생성</button>
+<div id="preview"></div>
+<canvas id="canvas"></canvas>
+<div id="error"></div>
+<a id="downloadLink" href="#" download="slideshow.mp4">영상 다운로드</a>
 
-  <script src="node_modules/mp4-muxer/mp4-muxerd.js"></script>
-  <script type="module">
-    let imageArray = [];
+<script src="node_modules/mp4-muxer/mp4-muxerd.js"></script>
+<script type="module">
     const imageInput = document.getElementById('imageInput');
     const createVideoButton = document.getElementById('createVideo');
     const previewContainer = document.getElementById('preview');
@@ -65,138 +64,121 @@
     const ctx = canvas.getContext('2d');
     const errorDiv = document.getElementById('error');
     const downloadLink = document.getElementById('downloadLink');
+    let images = [];
 
-    imageInput.addEventListener('change', async (event) => {
-      imageArray = [];
-      previewContainer.innerHTML = '';
-      errorDiv.textContent = '';
-      downloadLink.style.display = 'none';
-      const files = event.target.files;
-      for (const file of files) {
-        if (file.type.startsWith('image/')) {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            if (!ImageDecoder.isTypeSupported(file.type)) {
-                console.log(`이미지 포맷 ${file.type}은(는) 지원되지 않습니다.`);
-                return;
-            }
-
-            imageArray.push({
-              name: file.name,
-              data: e.target.result,
-              type: file.type,
-              size: file.size,
-              raw: file
-            });
-            const img = document.createElement('img');
-            img.src = e.target.result;
-            img.className = 'preview-image';
-            previewContainer.appendChild(img);
-            createVideoButton.disabled = false;
-          };
-          reader.readAsDataURL(file);
-        }
-      }
-    });
-    
-    async function createVideo() {
-      if (imageArray.length === 0) {
-        errorDiv.textContent = '이미지를 먼저 업로드하세요.';
-        return;
-      }
-      errorDiv.textContent = '영상 생성 중...';
-      createVideoButton.disabled = true;
-      const outputChunks = [];
-      const fps = 30;
-      const durationPerImage = 2;
-      const videoWidth = 1280;
-      const videoHeight = 720;
-
-      const bufTarget = new Mp4Muxer.ArrayBufferTarget();
-    const muxer = new Mp4Muxer.Muxer({
-        target: bufTarget,
-        video: {
-        codec: 'avc',
-        width: 1280,
-        height: 720
-        },
-        fastStart: 'in-memory'
-    });
-
-      const videoEncoder = new VideoEncoder({
-        output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-        error: (e) => {
-          console.error('인코딩 오류:', e);
-        }
-      });
-
-      const encoderConfig = {
-          codec: 'avc1.42001f',
-          width: videoWidth,
-          height: videoHeight,
-          framerate: fps,
-          bitrate: 1e6
-      };
-
-    const support = await VideoEncoder.isConfigSupported(encoderConfig);
-    if (support.supported == false) {
-        console.error("Video codec not supported!");
-        return;
+    function logError(...txt){
+        console.log(txt);
+        errorDiv.textContent = '영상 생성 중...';
+    }
+    function clearLog(){
+        errorDiv.textContent = '';
     }
 
-      videoEncoder.configure(encoderConfig);
+    imageInput.addEventListener('change', async (event) => {
+        images = [];
+        previewContainer.innerHTML = '';
+        clearLog();
+        downloadLink.style.display = 'none';
+        const files = event.target.files;
+        for (const file of files) {
+            if (file.type.startsWith('image/')) {
+                const img = new Image();
+                img.src = URL.createObjectURL(file);
+                img.className = 'preview-image';
+                await new Promise(resolve => img.onload = resolve);
+                images.push(img);
+                previewContainer.appendChild(img);
+                createVideoButton.disabled = false;
+            }
+        }
+    });
 
-      canvas.width = videoWidth;
-      canvas.height = videoHeight;
+    async function createVideo() {
+        if (images.length === 0) {
+            logError('이미지를 먼저 업로드하세요.');
+            return;
+        }
+        logError('영상 생성 중');
+        createVideoButton.disabled = true;
+        const outputChunks = [];
+        const fps = 10;
+        const durationPerImage = 2;
+        const videoWidth = 1280;
+        const videoHeight = 720;
 
-      let timestamp = 0;
-      for (const image of imageArray) {
-        try {
-          const arrayBuffer = await image.raw.arrayBuffer();
-          const uint8Array = new Uint8Array(arrayBuffer);
-          const imageDecoder = new ImageDecoder({
-            data: uint8Array,
-            type: image.type
-          });
-          const { image: decodedImage } = await imageDecoder.decode();
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          const scale = Math.min(videoWidth / decodedImage.displayWidth, videoHeight / decodedImage.displayHeight);
-          const scaledWidth = decodedImage.displayWidth * scale;
-          const scaledHeight = decodedImage.displayHeight * scale;
-          const offsetX = (videoWidth - scaledWidth) / 2;
-          const offsetY = (videoHeight - scaledHeight) / 2;
-          ctx.drawImage(decodedImage, offsetX, offsetY, scaledWidth, scaledHeight);
-          decodedImage.close();
+        const bufTarget = new Mp4Muxer.ArrayBufferTarget();
+        const muxer = new Mp4Muxer.Muxer({
+            target: bufTarget,
+            video: {
+                codec: 'avc',
+                width: videoWidth,
+                height: videoHeight
+            },
+            fastStart: 'in-memory'
+        });
+
+        const videoEncoder = new VideoEncoder({
+            output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+            error: (e) => {
+                logError('인코딩 에러',e);
+            }
+        });
+
+        const encoderConfig = {
+            codec: 'avc1.42001f',
+            width: videoWidth,
+            height: videoHeight,
+            framerate: fps,
+            bitrate: 1e6
+        };
+
+        const support = await VideoEncoder.isConfigSupported(encoderConfig);
+        if (support.supported == false) {
+            console.error("Video codec not supported!");
+            return;
+        }
+
+        videoEncoder.configure(encoderConfig);
+
+        canvas.width = videoWidth;
+        canvas.height = videoHeight;
+
+        let timestamp = 0;
+        for (const image of images) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const scale = Math.min(videoWidth / image.naturalWidth, videoHeight / image.naturalHeight);
+            const scaledWidth = image.naturalWidth * scale;
+            const scaledHeight = image.naturalHeight * scale;
+            const offsetX = (videoWidth - scaledWidth) / 2;
+            const offsetY = (videoHeight - scaledHeight) / 2;
+            ctx.drawImage(image, offsetX, offsetY, scaledWidth, scaledHeight);
+
+            let duration =  1_000_000 * durationPerImage; 
             const frame = new VideoFrame(canvas, {
-              timestamp: timestamp * 1_000_000 * durationPerImage,
-              duration: 1_000_000 * durationPerImage,
+                timestamp: timestamp,
+                duration: duration,
             });
+            timestamp += duration;
             videoEncoder.encode(frame, { keyFrame: true });
             frame.close();
-            timestamp++;
-        } catch (e) {
-          errorDiv.textContent = `디코딩 오류: ${image.name} (${e.message})`;
-          console.error('디코딩 오류:', e);
-          continue;
         }
-      }
 
-      //마지막 프레임???? KM Player의 경우 이게 없으면 마지막 이미지가 동작하지 않는다
-      const frame = new VideoFrame(canvas,{timestamp : timestamp * 1_000_000 * durationPerImage, duration:0});
-      videoEncoder.encode(frame, {keyFrame:true});
-      frame.close();
+        //마지막 프레임???? KM Player의 경우 이게 없으면 마지막 이미지가 동작하지 않는다
+        const frame = new VideoFrame(canvas,{timestamp : timestamp * 1_000_000 * durationPerImage, duration:0});
+        videoEncoder.encode(frame, {keyFrame:true});
+        frame.close();
 
-      await videoEncoder.flush();
-      muxer.finalize();
-      videoEncoder.close();
-      const blob = new Blob([bufTarget.buffer], { type: 'video/mp4' });
-      downloadLink.href = URL.createObjectURL(blob);
-      downloadLink.style.display = 'inline-block';
-      errorDiv.textContent = '영상 생성 완료!';
-      createVideoButton.disabled = false;
+        await videoEncoder.flush();
+        muxer.finalize();
+        videoEncoder.close();
+        const blob = new Blob([bufTarget.buffer], { type: 'video/mp4' });
+        downloadLink.href = URL.createObjectURL(blob);
+        downloadLink.style.display = 'inline-block';
+        logError('영상 생성 완료!');
+        createVideoButton.disabled = false;
     }
 
     createVideoButton.addEventListener('click', createVideo);
-  </script>
+</script>
 </body>
 </html>
