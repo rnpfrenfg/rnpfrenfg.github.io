@@ -1,0 +1,45 @@
+import {VideoGenerator} from "./videoGenerator.js";
+import { Logger } from "./Logger.js";
+
+let imageInput: HTMLInputElement = document.getElementById('imageInput') as HTMLInputElement;
+let createVideoButton: HTMLButtonElement = document.getElementById('createVideo') as HTMLButtonElement;
+let previewContainer: HTMLDivElement = document.getElementById('preview') as HTMLDivElement;
+let downloadLink: HTMLAnchorElement = document.getElementById('downloadLink') as HTMLAnchorElement;
+let canvas: HTMLCanvasElement = document.getElementById('canvas') as HTMLCanvasElement;
+
+let logger:Logger = new Logger('error');
+const videoGenerator = new VideoGenerator(1280,720,canvas, logger);
+
+imageInput.addEventListener('change', handleImageInput.bind(this));
+createVideoButton.addEventListener('click', createVideo.bind(this));
+
+async function handleImageInput(event: Event): Promise<void> {
+    previewContainer.innerHTML = '';
+    downloadLink.style.display = 'none';
+    const files = (event.target as HTMLInputElement).files;
+    if (!files) return;
+
+    let validContents:number = 0;
+    for(const file of Array.from(files || [])){
+        if (file.type.startsWith('image/')) {
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            img.className = 'preview-image';
+            
+            await new Promise(resolve => img.onload = resolve);
+            previewContainer.appendChild(img);
+            videoGenerator.addImageContent(img, 2);
+            validContents++;
+        }
+    }
+    createVideoButton.disabled = validContents === 0;
+}
+
+async function createVideo(){
+    createVideoButton.disabled = true;
+    let blob: Blob|any = await videoGenerator.createVideo();
+    if(blob == null)return;
+    downloadLink.href = URL.createObjectURL(blob);
+    downloadLink.style.display = 'inline-block';
+    createVideoButton.disabled = false;
+}

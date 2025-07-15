@@ -1,0 +1,13 @@
+{
+  "name": "image-to-video",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "npx http-server ./ -p 8080"
+  },
+  "dependencies": {
+    "http-server": "^14.1.1",
+    "typescript": "^5.8.3"
+  }
+}
