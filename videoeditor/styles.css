@@ -93,3 +93,32 @@ button:disabled {
     border: 2px solid #ddd;
     border-radius: 4px;
 }
+
+.alert-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1000;
+}
+
+.alert-box {
+    background: #333;
+    color: white;
+    padding: 10px 15px;
+    border-radius: 5px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.2);
+    margin-top: 10px; /* 새 알림 간격 */
+    animation: slideIn 0.3s ease-out, fadeOut 0.3s 2.7s;
+    transform: translateY(0);
+    z-index: 1000; /* 각 알림 개별 z-index 동적 할당 필요 */
+}
+
+@keyframes slideIn {
+    from { transform: translateY(100%); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
