@@ -10,14 +10,27 @@ var ContentEffect;
 export class VideoGenerator {
     constructor(width, height, canvas, log) {
         this.contents = [];
-        this.chunks = [];
         this.audioList = [];
-        this.audioChunks = [];
+        this.glProgram = null;
+        this.positionLocation = 0;
+        this.texCoordLocation = 0;
+        this.resolutionLocation = null;
+        this.positionUniformLocation = null;
+        this.scaleLocation = null;
+        this.imageLocation = null;
+        this.logger = log;
         this.videoWidth = width;
         this.videoHeight = height;
         this.canvas = canvas;
-        this.ctx = this.canvas.getContext('2d');
-        this.logger = log;
+        this.canvas.width = this.videoWidth;
+        this.canvas.height = this.videoHeight;
+        const gl = this.canvas.getContext('webgl');
+        if (!gl) {
+            this.logger.log('WebGL을 지원하지 않는 브라우저');
+            throw new Error('WebGL을 지원하지 않는 브라우저');
+        }
+        this.gl = gl;
+        this.setupWebGL();
     }
     logError(...txt) {
         this.logger.log(...txt);
@@ -38,19 +51,80 @@ export class VideoGenerator {
         this.audioList.push([audioBuffer, start, duration]);
     }
     clearAudioContents() {
-        this.logger.log('Clearing audio content');
         this.audioList = [];
-        this.audioChunks = [];
     }
     clearContents() {
-        this.logger.log('Clearing all contents');
         this.contents.forEach(content => URL.revokeObjectURL(content.src.src));
         this.contents = [];
         this.clearAudioContents();
     }
-    clearChunks() {
-        this.audioChunks = [];
-        this.chunks = [];
+    setupWebGL() {
+        const gl = this.gl;
+        const vertexShaderSource = `
+            attribute vec2 a_position;
+            attribute vec2 a_texCoord;
+            uniform vec2 u_resolution;
+            uniform vec2 u_position;
+            uniform vec2 u_scale;
+            varying vec2 v_texCoord;
+            void main() {
+                vec2 scaledPos = a_position * u_scale + u_position;
+                vec2 clipSpace = (scaledPos / u_resolution) * 2.0 - 1.0;
+                gl_Position = vec4(clipSpace * vec2(1, -1), 0.0, 1.0);
+                v_texCoord = a_texCoord;
+            }
+        `;
+        const fragmentShaderSource = `
+            precision mediump float;
+            varying vec2 v_texCoord;
+            uniform sampler2D u_image;
+            void main() {
+                gl_FragColor = texture2D(u_image, v_texCoord);
+            }
+        `;
+        const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vertexShader, vertexShaderSource);
+        gl.compileShader(vertexShader);
+        if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
+            this.logError('Vertex Shader 컴파일 실패:', gl.getShaderInfoLog(vertexShader));
+            return;
+        }
+        const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fragmentShader, fragmentShaderSource);
+        gl.compileShader(fragmentShader);
+        if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
+            this.logError('Fragment Shader 컴파일 실패:', gl.getShaderInfoLog(fragmentShader));
+            return;
+        }
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            this.logError('Program 링크 실패:', gl.getProgramInfoLog(program));
+            return;
+        }
+        gl.useProgram(program);
+        this.glProgram = program;
+        this.positionLocation = gl.getAttribLocation(program, 'a_position');
+        this.texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
+        this.resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
+        this.positionUniformLocation = gl.getUniformLocation(program, 'u_position');
+        this.scaleLocation = gl.getUniformLocation(program, 'u_scale');
+        this.imageLocation = gl.getUniformLocation(program, 'u_image');
+        const rectangle = new Float32Array([
+            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0, 1.0,
+            1.0, 1.0, 1.0, 1.0
+        ]);
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, rectangle, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(this.positionLocation);
+        gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 16, 0);
+        gl.enableVertexAttribArray(this.texCoordLocation);
+        gl.vertexAttribPointer(this.texCoordLocation, 2, gl.FLOAT, false, 16, 8);
     }
     async createVideo() {
         if (this.contents.length === 0) {
@@ -58,7 +132,6 @@ export class VideoGenerator {
             return null;
         }
         this.clearLog();
-        this.clearChunks();
         this.logError('영상 생성 중');
         const fps = 60;
         const totalVideoDuration = this.contents.reduce((sum, content) => sum + content.duration, 0) * 1000000; // 마이크로초
@@ -84,8 +157,7 @@ export class VideoGenerator {
         const muxer = new Mp4Muxer.Muxer(muxerOptions);
         const videoEncoder = new VideoEncoder({
             output: (chunk, meta) => {
-                this.chunks.push({ chunk, meta });
-                this.logger.log(`Video chunk added: timestamp=${chunk.timestamp / 1000000}s`);
+                muxer.addVideoChunk(chunk, meta);
             },
             error: (e) => {
                 this.logError('비디오 인코딩 에러:', e.message);
@@ -104,21 +176,32 @@ export class VideoGenerator {
             return null;
         }
         videoEncoder.configure(encoderConfig);
-        this.canvas.width = this.videoWidth;
-        this.canvas.height = this.videoHeight;
+        const gl = this.gl;
+        gl.clearColor(1, 1, 1.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.uniform2f(this.resolutionLocation, this.videoWidth, this.videoHeight);
         let timestamp = 0;
         for (const con of this.contents) {
             const duration = con.duration * 1000000;
             if (con.type === ContentType.IMAGE) {
+                const texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, con.src);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                 if (con.effect === ContentEffect.DEFAULT) {
                     const image = con.src;
-                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
                     const scale = Math.min(this.videoWidth / image.naturalWidth, this.videoHeight / image.naturalHeight);
                     const scaledWidth = image.naturalWidth * scale;
                     const scaledHeight = image.naturalHeight * scale;
                     const offsetX = (this.videoWidth - scaledWidth) / 2;
                     const offsetY = (this.videoHeight - scaledHeight) / 2;
-                    this.ctx.drawImage(image, offsetX, offsetY, scaledWidth, scaledHeight);
+                    gl.clear(gl.COLOR_BUFFER_BIT);
+                    gl.uniform2f(this.positionUniformLocation, offsetX, offsetY);
+                    gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
+                    gl.uniform1i(this.imageLocation, 0);
+                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
                     const frame = new VideoFrame(this.canvas, {
                         timestamp,
                         duration,
@@ -128,7 +211,6 @@ export class VideoGenerator {
                 }
                 else if (con.effect === ContentEffect.RANDOM_MOVE) {
                     const image = con.src;
-                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
                     const scale = Math.min(this.videoWidth / image.naturalWidth, this.videoHeight / image.naturalHeight) / 3;
                     const scaledWidth = image.naturalWidth * scale;
                     const scaledHeight = image.naturalHeight * scale;
@@ -140,8 +222,11 @@ export class VideoGenerator {
                     let spdX = Math.floor(Math.random() * maxSpd * 2) - maxSpd;
                     let spdY = Math.floor(Math.random() * maxSpd * 2) - maxSpd;
                     for (let i = 0; i < fps * con.duration; i++) {
-                        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-                        this.ctx.drawImage(image, x, y, scaledWidth, scaledHeight);
+                        gl.clear(gl.COLOR_BUFFER_BIT);
+                        gl.uniform2f(this.positionUniformLocation, x, y);
+                        gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
+                        gl.uniform1i(this.imageLocation, 0);
+                        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
                         const frame = new VideoFrame(this.canvas, {
                             timestamp: timestamp + (1000000 / fps) * i,
                             duration: 1000000 / fps + 1,
@@ -157,6 +242,7 @@ export class VideoGenerator {
                         spdX += (Math.floor(Math.random() * maxSpd * 2) - maxSpd) * 30 / fps;
                     }
                 }
+                gl.deleteTexture(texture);
             }
             timestamp += duration;
         }
@@ -165,13 +251,10 @@ export class VideoGenerator {
         videoEncoder.encode(frame, { keyFrame: true });
         frame.close();
         await videoEncoder.flush();
-        this.logger.log(`Video encoding complete: ${this.chunks.length} chunks`);
-        // 오디오 인코딩
         if (this.audioList.length > 0) {
             const audioEncoder = new AudioEncoder({
                 output: (chunk, meta) => {
-                    this.audioChunks.push({ chunk, meta });
-                    this.logger.log(`Audio chunk added: timestamp=${chunk.timestamp / 1000000}s, byteLength=${chunk.byteLength}`);
+                    muxer.addAudioChunk(chunk, meta);
                 },
                 error: (e) => {
                     this.logger.log('오디오 인코딩 에러:', e.message);
@@ -215,16 +298,7 @@ export class VideoGenerator {
                 audioData.close();
             }
             await audioEncoder.flush();
-            this.logger.log(`Audio encoding complete: ${this.audioChunks.length} chunks`);
         }
-        // 청크 추가
-        for (const chunk of this.chunks) {
-            muxer.addVideoChunk(chunk.chunk, chunk.meta);
-        }
-        for (const audio of this.audioChunks) {
-            muxer.addAudioChunk(audio.chunk, audio.meta);
-        }
-        this.logger.log(`Muxing: ${this.chunks.length} video chunks, ${this.audioChunks.length} audio chunks`);
         muxer.finalize();
         videoEncoder.close();
         const buffer = muxerOptions.target.buffer;
