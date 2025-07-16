@@ -9,6 +9,11 @@
 <body>
     <h1>이미지 업로드 및 영상 생성</h1>
     <input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" multiple>
+    <div class="input-group">
+        <label for="audioInput">오디오 파일 업로드 (MP3, WAV 등)</label>
+        <input type="file" id="audioInput" accept="audio/*">
+        <audio id="audioPreview" controls style="display: none;"></audio>
+    </div>
     <button id="createVideo" disabled>영상 생성</button>
     <div id="preview"></div>
     <canvas id="canvas"></canvas>

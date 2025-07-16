@@ -5,9 +5,12 @@ let createVideoButton = document.getElementById('createVideo');
 let previewContainer = document.getElementById('preview');
 let downloadLink = document.getElementById('downloadLink');
 let canvas = document.getElementById('canvas');
+let audioInput = document.getElementById('audioInput');
+let audioPreview = document.getElementById('audioPreview');
 let logger = new Logger('error');
 const videoGenerator = new VideoGenerator(1280, 720, canvas, logger);
 imageInput.addEventListener('change', handleImageInput.bind(this));
+audioInput.addEventListener('change', handleAudioInput);
 createVideoButton.addEventListener('click', createVideo.bind(this));
 async function handleImageInput(event) {
     previewContainer.innerHTML = '';
@@ -28,6 +31,32 @@ async function handleImageInput(event) {
         }
     }
     createVideoButton.disabled = validContents === 0;
+}
+async function handleAudioInput(event) {
+    audioPreview.style.display = 'none';
+    const files = event.target.files;
+    if (!files || files.length === 0) {
+        videoGenerator.clearAudioContents();
+        return;
+    }
+    const file = files[0];
+    if (!file.type.startsWith('audio/')) {
+        logger.log('오디오 파일 형식이 아닙니다.');
+        return;
+    }
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+        const audioContext = new AudioContext();
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        videoGenerator.addAudioContent(audioBuffer, 0, audioBuffer.duration);
+        audioPreview.src = URL.createObjectURL(file);
+        audioPreview.style.display = 'block';
+        logger.log('오디오 파일이 업로드되었습니다.');
+    }
+    catch (e) {
+        logger.log('오디오 로딩 실패:', e.message);
+        videoGenerator.clearAudioContents();
+    }
 }
 async function createVideo() {
     createVideoButton.disabled = true;
