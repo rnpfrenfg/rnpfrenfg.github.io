@@ -9,9 +9,9 @@ var ContentEffect;
 })(ContentEffect || (ContentEffect = {}));
 export class VideoGenerator {
     constructor(width, height, canvas, log) {
-        this.audioList = [];
         this.contents = [];
         this.chunks = [];
+        this.audioList = [];
         this.audioChunks = [];
         this.videoWidth = width;
         this.videoHeight = height;
@@ -61,6 +61,8 @@ export class VideoGenerator {
         this.clearChunks();
         this.logError('영상 생성 중');
         const fps = 60;
+        const totalVideoDuration = this.contents.reduce((sum, content) => sum + content.duration, 0) * 1000000; // 마이크로초
+        this.logger.log(`Total video duration: ${totalVideoDuration / 1000000}s`);
         const muxerOptions = {
             target: new Mp4Muxer.ArrayBufferTarget(),
             video: {
@@ -191,7 +193,7 @@ export class VideoGenerator {
             for (const [audioBuffer, start, duration] of this.audioList) {
                 const sampleRate = audioBuffer.sampleRate;
                 const numberOfChannels = audioBuffer.numberOfChannels;
-                const audioDuration = Math.min(duration, audioBuffer.duration) * 1000000;
+                const audioDuration = Math.min(duration, audioBuffer.duration, (totalVideoDuration - start * 1000000) / 1000000) * 1000000;
                 const startTime = start * 1000000;
                 const numberOfFrames = Math.floor((audioDuration * sampleRate) / 1000000);
                 const channelData = new Float32Array(numberOfFrames * numberOfChannels);

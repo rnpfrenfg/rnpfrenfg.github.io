@@ -7,6 +7,7 @@ let downloadLink = document.getElementById('downloadLink');
 let canvas = document.getElementById('canvas');
 let audioInput = document.getElementById('audioInput');
 let audioPreview = document.getElementById('audioPreview');
+let videoPreview = document.getElementById('videoPreview');
 let logger = new Logger('error');
 const videoGenerator = new VideoGenerator(1280, 720, canvas, logger);
 imageInput.addEventListener('change', handleImageInput.bind(this));
@@ -61,9 +62,17 @@ async function handleAudioInput(event) {
 async function createVideo() {
     createVideoButton.disabled = true;
     let blob = await videoGenerator.createVideo();
-    if (blob == null)
+    if (blob == null) {
+        logger.log('영상 생성 실패');
         return;
-    downloadLink.href = URL.createObjectURL(blob);
+    }
+    if (!createVideoButton.disabled) {
+        URL.revokeObjectURL(videoPreview.src);
+    }
+    const videoUrl = URL.createObjectURL(blob);
+    videoPreview.src = videoUrl;
+    videoPreview.style.display = 'block';
+    downloadLink.href = videoUrl;
     downloadLink.style.display = 'inline-block';
     createVideoButton.disabled = false;
 }

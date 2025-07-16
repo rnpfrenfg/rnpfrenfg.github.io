@@ -15,7 +15,6 @@ body {
 .input-group {
     margin: 15px 0;
 }
-
 .input-group label {
     display: block;
     font-weight: bold;
@@ -32,6 +31,8 @@ canvas {
     border: 1px solid black;
     display: block;
     margin: 20px auto;
+    max-width: 300px;
+    max-height: 200px;
 }
 
 button {
@@ -82,5 +83,13 @@ button:disabled {
     background-color: #008CBA;
     color: white;
     text-decoration: none;
+    border-radius: 4px;
+}
+#videoPreview {
+    display: none;
+    max-width: 100%;
+    max-height: 400px;
+    margin: 20px auto;
+    border: 2px solid #ddd;
     border-radius: 4px;
 }

@@ -8,6 +8,7 @@ let downloadLink: HTMLAnchorElement = document.getElementById('downloadLink') as
 let canvas: HTMLCanvasElement = document.getElementById('canvas') as HTMLCanvasElement;
 let audioInput: HTMLInputElement = document.getElementById('audioInput') as HTMLInputElement;
 let audioPreview: HTMLAudioElement = document.getElementById('audioPreview') as HTMLAudioElement;
+let videoPreview: HTMLVideoElement = document.getElementById('videoPreview') as HTMLVideoElement;
 
 let logger:Logger = new Logger('error');
 const videoGenerator = new VideoGenerator(1280,720,canvas, logger);
@@ -69,8 +70,18 @@ async function handleAudioInput(event: Event): Promise<void> {
 async function createVideo(){
     createVideoButton.disabled = true;
     let blob: Blob|any = await videoGenerator.createVideo();
-    if(blob == null)return;
-    downloadLink.href = URL.createObjectURL(blob);
+    if(blob == null){
+        logger.log('영상 생성 실패');
+        return;
+    }
+    if(!createVideoButton.disabled){
+        URL.revokeObjectURL(videoPreview.src);
+    }
+
+    const videoUrl = URL.createObjectURL(blob);
+    videoPreview.src = videoUrl;
+    videoPreview.style.display = 'block';
+    downloadLink.href = videoUrl;
     downloadLink.style.display = 'inline-block';
     createVideoButton.disabled = false;
 }
