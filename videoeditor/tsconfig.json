@@ -4,6 +4,7 @@
         "module": "ESNext",
         "outDir": "./dist",
         "rootDir": "./src",
+        "jsx": "preserve",
         "strict": true,
         "esModuleInterop": true,
         "skipLibCheck": true,

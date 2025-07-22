@@ -1,16 +1,7 @@
 import { Logger } from "./Logger.js";
-var ContentType;
-(function (ContentType) {
-    ContentType["IMAGE"] = "image";
-})(ContentType || (ContentType = {}));
-var ContentEffect;
-(function (ContentEffect) {
-    ContentEffect["DEFAULT"] = "default";
-    ContentEffect["RANDOM_MOVE"] = "randomMove";
-})(ContentEffect || (ContentEffect = {}));
+import { ContentType, ContentEffect } from "./videoline.js";
 export class VideoGenerator {
     constructor(width, height, canvas) {
-        this.contents = [];
         this.audioList = [];
         this.glProgram = null;
         this.positionLocation = 0;
@@ -21,6 +12,7 @@ export class VideoGenerator {
         this.imageLocation = null;
         this.videoWidth = width;
         this.videoHeight = height;
+        this.videoLine = [];
         this.canvas = canvas;
         this.canvas.width = this.videoWidth;
         this.canvas.height = this.videoHeight;
@@ -32,25 +24,12 @@ export class VideoGenerator {
         this.gl = gl;
         this.setupWebGL();
     }
-    addImageContent(image, duration) {
-        this.contents.push({
-            duration,
-            type: ContentType.IMAGE,
-            src: image,
-            effect: ContentEffect.RANDOM_MOVE,
-        });
-    }
     addAudioContent(audioBuffer, start, duration) {
         Logger.log(`Adding audio: duration=${audioBuffer.duration}s, start=${start}s, requested duration=${duration}s`);
         this.audioList.push([audioBuffer, start, duration]);
     }
     clearAudioContents() {
         this.audioList = [];
-    }
-    clearContents() {
-        this.contents.forEach(content => URL.revokeObjectURL(content.src.src));
-        this.contents = [];
-        this.clearAudioContents();
     }
     setupWebGL() {
         const gl = this.gl;
@@ -120,15 +99,44 @@ export class VideoGenerator {
         gl.enableVertexAttribArray(this.texCoordLocation);
         gl.vertexAttribPointer(this.texCoordLocation, 2, gl.FLOAT, false, 16, 8);
     }
+    processLine(gl, line, now) {
+        const contents = line.getContents();
+        if (line.getType() == ContentType.image) {
+        }
+        if (line.getType() === ContentType.image) {
+            for (const con of line.getContents()) {
+                if (!(con.start < now && now < con.start + con.duration))
+                    continue;
+                if (con.effect === ContentEffect.DEFAULT) {
+                    const image = con.src;
+                    const scale = Math.min(this.videoWidth / image.naturalWidth, this.videoHeight / image.naturalHeight);
+                    const scaledWidth = image.naturalWidth * scale;
+                    const scaledHeight = image.naturalHeight * scale;
+                    const offsetX = (this.videoWidth - scaledWidth) / 2;
+                    const offsetY = (this.videoHeight - scaledHeight) / 2;
+                    gl.clear(gl.COLOR_BUFFER_BIT);
+                    const texture = gl.createTexture();
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, con.src);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                    gl.uniform2f(this.positionUniformLocation, offsetX, offsetY);
+                    gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
+                    gl.uniform1i(this.imageLocation, 0);
+                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                    gl.deleteTexture(texture);
+                }
+            }
+        }
+    }
     async createVideo() {
-        if (this.contents.length === 0) {
-            Logger.log('이미지를 먼저 업로드하세요.');
+        if (this.videoLine.length === 0) {
+            Logger.log('컨텐츠를 먼저 업로드하세요.');
             return null;
         }
         Logger.log('영상 생성 중');
         const fps = 60;
-        const totalVideoDuration = this.contents.reduce((sum, content) => sum + content.duration, 0) * 1000000; // 마이크로초
-        Logger.log(`Total video duration: ${totalVideoDuration / 1000000}s`);
         const muxerOptions = {
             target: new Mp4Muxer.ArrayBufferTarget(),
             video: {
@@ -170,77 +178,28 @@ export class VideoGenerator {
         }
         videoEncoder.configure(encoderConfig);
         const gl = this.gl;
-        gl.clearColor(1, 1, 1.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
         gl.uniform2f(this.resolutionLocation, this.videoWidth, this.videoHeight);
-        let timestamp = 0;
-        for (const con of this.contents) {
-            const duration = con.duration * 1000000;
-            if (con.type === ContentType.IMAGE) {
-                const texture = gl.createTexture();
-                gl.bindTexture(gl.TEXTURE_2D, texture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, con.src);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                if (con.effect === ContentEffect.DEFAULT) {
-                    const image = con.src;
-                    const scale = Math.min(this.videoWidth / image.naturalWidth, this.videoHeight / image.naturalHeight);
-                    const scaledWidth = image.naturalWidth * scale;
-                    const scaledHeight = image.naturalHeight * scale;
-                    const offsetX = (this.videoWidth - scaledWidth) / 2;
-                    const offsetY = (this.videoHeight - scaledHeight) / 2;
-                    gl.clear(gl.COLOR_BUFFER_BIT);
-                    gl.uniform2f(this.positionUniformLocation, offsetX, offsetY);
-                    gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
-                    gl.uniform1i(this.imageLocation, 0);
-                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-                    const frame = new VideoFrame(this.canvas, {
-                        timestamp,
-                        duration,
-                    });
-                    videoEncoder.encode(frame, { keyFrame: true });
-                    frame.close();
-                }
-                else if (con.effect === ContentEffect.RANDOM_MOVE) {
-                    const image = con.src;
-                    const scale = Math.min(this.videoWidth / image.naturalWidth, this.videoHeight / image.naturalHeight) / 3;
-                    const scaledWidth = image.naturalWidth * scale;
-                    const scaledHeight = image.naturalHeight * scale;
-                    const maxX = this.videoWidth - scaledWidth;
-                    const maxY = this.videoHeight - scaledHeight;
-                    let x = Math.floor(Math.random() * maxX);
-                    let y = Math.floor(Math.random() * maxY);
-                    const maxSpd = 500;
-                    let spdX = Math.floor(Math.random() * maxSpd * 2) - maxSpd;
-                    let spdY = Math.floor(Math.random() * maxSpd * 2) - maxSpd;
-                    for (let i = 0; i < fps * con.duration; i++) {
-                        gl.clear(gl.COLOR_BUFFER_BIT);
-                        gl.uniform2f(this.positionUniformLocation, x, y);
-                        gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
-                        gl.uniform1i(this.imageLocation, 0);
-                        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-                        const frame = new VideoFrame(this.canvas, {
-                            timestamp: timestamp + (1000000 / fps) * i,
-                            duration: 1000000 / fps + 1,
-                        });
-                        videoEncoder.encode(frame, { keyFrame: true });
-                        frame.close();
-                        x += Math.floor(spdX / fps);
-                        y += Math.floor(spdY / fps);
-                        if (x < 0 || x > maxX)
-                            spdX = Math.floor(Math.random() * maxSpd * 2) - maxSpd;
-                        if (y < 0 || y > maxY)
-                            spdY = Math.floor(Math.random() * maxSpd * 2) - maxSpd;
-                        spdX += (Math.floor(Math.random() * maxSpd * 2) - maxSpd) * 30 / fps;
-                    }
-                }
-                gl.deleteTexture(texture);
+        let totalVideoDuration = 0;
+        for (const line of this.videoLine)
+            for (const con of line.getContents()) {
+                let end = con.start + con.duration;
+                totalVideoDuration = totalVideoDuration > end ? totalVideoDuration : end;
             }
-            timestamp += duration;
+        for (let timestamp = 0; timestamp < totalVideoDuration; timestamp += fps) {
+            gl.clearColor(1, 1, 1.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            for (const line of this.videoLine) {
+                this.processLine(gl, line, timestamp);
+            }
+            const frame = new VideoFrame(this.canvas, {
+                timestamp: timestamp * 1000000,
+                duration: fps,
+            });
+            videoEncoder.encode(frame, { keyFrame: true });
+            frame.close();
         }
         // 마지막 프레임
-        const frame = new VideoFrame(this.canvas, { timestamp, duration: 0 });
+        const frame = new VideoFrame(this.canvas, { timestamp: totalVideoDuration, duration: 0 });
         videoEncoder.encode(frame, { keyFrame: true });
         frame.close();
         await videoEncoder.flush();
@@ -266,6 +225,7 @@ export class VideoGenerator {
                 return null;
             }
             audioEncoder.configure(audioConfig);
+            Logger.log(`Total video duration: ${totalVideoDuration / 1000000}s`);
             for (const [audioBuffer, start, duration] of this.audioList) {
                 const sampleRate = audioBuffer.sampleRate;
                 const numberOfChannels = audioBuffer.numberOfChannels;
