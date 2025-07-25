@@ -21,6 +21,7 @@ const videoGenerator: VideoGenerator = new VideoGenerator(storage,canvas);
 
 let tlStart = 0;
 let tlEnd = 0;
+let tlNow = 0;
 
 drawStorage(storage);
 
@@ -59,6 +60,7 @@ function drawStorage(storage: VideoProjectStorage){
         drawContent(content.name,content.id,content.type);
     }
 
+    changeTimeline(0,storage.getVideoEndTime() + 5);
     timelineTrakcs.innerHTML = '';
     for(const track of storage.getTracks()){
         const trackDiv = createVideoTrackDiv(track.name,track.id);
@@ -66,11 +68,9 @@ function drawStorage(storage: VideoProjectStorage){
         for(const content of track.contents){
             renderVideoTrackItem(content,trackDiv);
         }
-        
         setupDragAndDrop(sidebar, trackDiv);
     }
 
-    changeTimeline(0,storage.getVideoEndTime() + 5, 0);
 }
 
 function handleClickTrack(){
@@ -183,13 +183,16 @@ function clickAddLineButton(){
     drawStorage(storage);
 }
 
-function changeTimeline(start: number, end: number, now: number) {
+function changeTimeline(start: number, end: number, now: number = tlNow) {
     timelineNow.textContent=now.toString();
     timelineStart.textContent=start.toString();
     timelineEnd.textContent=end.toString();
 
+    playhead.style.left = `${videoTimeToClient(now)}px`;
+
     tlStart = start;
     tlEnd = end;
+    tlNow = now;
     videoGenerator.drawImage(now);
 }
 
@@ -261,8 +264,6 @@ function setupDragAndDrop(sidebar: HTMLDivElement, timeline: HTMLDivElement) {
 }
 
 function handleDrop(sidebarItems: HTMLElement[], trackDiv: HTMLElement) {
-    console.log('Dropped items:', sidebarItems.map(item => item.querySelector('.file-name')?.textContent),'to',trackDiv.id);
-
     const trackID=trackDiv.id;
     const track = storage.getVideoTrack(trackID);
     if(track===null)return;
@@ -279,8 +280,9 @@ function renderVideoTrackItem(content: VideoTrackItem, track: HTMLDivElement) {
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'track-bar';
-    contentDiv.style.left = `${content.start * 50}px`;
-    contentDiv.style.width = `${content.duration * 50}px`;
+    let startPos = videoTimeToClient(content.start);
+    contentDiv.style.left = `${startPos}px`;
+    contentDiv.style.width = `${videoTimeToClient(content.duration + content.start) - startPos}px`;
     contentDiv.style.backgroundColor = '#34d399';
     contentDiv.innerHTML = `<span>${content.duration}s</span>`;
 
@@ -293,10 +295,14 @@ function renderVideoTrackItem(content: VideoTrackItem, track: HTMLDivElement) {
 function controlTimeline(e: MouseEvent){
     const rect = timelineruler.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    playhead.style.left = `${x}px`;
-
-    console.log(tlStart,tlEnd,x,rect.right);
     let now = tlStart + (x/(rect.right-rect.left))*(tlEnd-tlStart);
     if(now<0)now=0;
     changeTimeline(tlStart, tlEnd, now)
+}
+
+function videoTimeToClient(now: number){
+    const rect = timelineruler.getBoundingClientRect();
+    const ret = ((now-tlStart)/(tlEnd-tlStart))*(rect.right-rect.left);
+    console.log(now,ret);
+    return ret;
 }
