@@ -1,13 +1,10 @@
 import { Logger } from "./Logger.js";
-import {VideoLine, Content,ContentType, ContentEffect} from "./videoline.js";
+import {VideoProjectStorage,VideoTrack, Content,ContentType, ContentEffect} from "./videotrack.js";
 
 export class VideoGenerator {
     private canvas: HTMLCanvasElement;
-    private videoWidth: number;
-    private videoHeight: number;
-    private audioList: [bufffer: AudioBuffer, start: number, duration: number][] = [];
+    private storage: VideoProjectStorage;
 
-    private videoLine: VideoLine[];
 
     private gl: WebGLRenderingContext;
     private glProgram: WebGLProgram | null = null;
@@ -18,13 +15,10 @@ export class VideoGenerator {
     private scaleLocation: WebGLUniformLocation | null = null;
     private imageLocation: WebGLUniformLocation | null = null;
 
-    constructor(width: number, height: number, canvas: HTMLCanvasElement) {
-        this.videoWidth = width;
-        this.videoHeight = height;
-        this.videoLine = [];
+    constructor(storage: VideoProjectStorage, canvas: HTMLCanvasElement) {
+        this.storage=storage;
         this.canvas = canvas;
-        this.canvas.width = this.videoWidth;
-        this.canvas.height = this.videoHeight;
+        this.resize(storage.getWidth(), storage.getHeight());
 
         const gl = this.canvas.getContext('webgl');
         if (!gl) {
@@ -33,15 +27,6 @@ export class VideoGenerator {
         }
         this.gl = gl;
         this.setupWebGL();
-    }
-
-    public addAudioContent(audioBuffer: AudioBuffer, start: number, duration: number): void {
-        Logger.log(`Adding audio: duration=${audioBuffer.duration}s, start=${start}s, requested duration=${duration}s`);
-        this.audioList.push([audioBuffer, start, duration]);
-    }
-
-    public clearAudioContents(): void {
-        this.audioList = [];
     }
 
     private setupWebGL() {
@@ -120,30 +105,28 @@ export class VideoGenerator {
         gl.vertexAttribPointer(this.texCoordLocation, 2, gl.FLOAT, false, 16, 8);
     }
 
-    private processLine(gl: WebGLRenderingContext, line: VideoLine, now: number): void{
+    private processLine(gl: WebGLRenderingContext, line: VideoTrack, now: number): void{
 
-        const contents = line.getContents();
-        if(line.getType() == ContentType.image){
+        const contents = line.contents;
+        const width = this.storage.getWidth();
+        const height = this.storage.getHeight();
 
-        }
-
-        if (line.getType() === ContentType.image) {
-            for(const con of line.getContents()){
-                if(!(con.start < now && now < con.start + con.duration))
+        if (line.type === ContentType.image) {
+            for(const con of contents){
+                if(!(con.start <= now && now < con.start + con.duration))
                     continue;
 
-                if (con.effect === ContentEffect.DEFAULT) {
-                    const image = con.src;
-                    const scale = Math.min(this.videoWidth / image.naturalWidth, this.videoHeight / image.naturalHeight);
+                if (ContentEffect.DEFAULT === ContentEffect.DEFAULT) {
+                    const image:HTMLImageElement = con.content.src as HTMLImageElement;
+                    const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
                     const scaledWidth = image.naturalWidth * scale;
                     const scaledHeight = image.naturalHeight * scale;
-                    const offsetX = (this.videoWidth - scaledWidth) / 2;
-                    const offsetY = (this.videoHeight - scaledHeight) / 2;
+                    const offsetX = (width - scaledWidth) / 2;
+                    const offsetY = (height - scaledHeight) / 2;
 
-                    gl.clear(gl.COLOR_BUFFER_BIT);
                     const texture = gl.createTexture();
                     gl.bindTexture(gl.TEXTURE_2D, texture);
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, con.src);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -159,33 +142,54 @@ export class VideoGenerator {
         }
     }
 
+    public drawImage(now:number){
+        const gl = this.gl;
+        gl.uniform2f(this.resolutionLocation, this.storage.getWidth(), this.storage.getHeight());
+        gl.clearColor(1, 1, 1.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        for(const line of this.storage.getTracks()){
+            this.processLine(gl, line, now);
+        }
+    }
+
+    public resize(width: number, height: number): void{
+        this.storage.resize(width,height);
+        this.canvas.width = width;
+        this.canvas.height = height;
+    }
+
     public async createVideo(): Promise<Blob | null> {
-        if (this.videoLine.length === 0) {
+        const storage = this.storage;
+        const width = storage.getWidth();
+        const height = storage.getHeight();
+        const tracks = storage.getTracks();
+        const fps = storage.getFPS();
+        const totalVideoDuration = storage.getVideoEndTime();
+
+        if (tracks.length === 0) {
             Logger.log('컨텐츠를 먼저 업로드하세요.');
             return null;
         }
         Logger.log('영상 생성 중');
 
-        const fps = 60;
-
+        //init
         const muxerOptions: any = {
             target: new Mp4Muxer.ArrayBufferTarget(),
             video: {
                 codec: 'avc',
-                width: this.videoWidth,
-                height: this.videoHeight,
+                width: width,
+                height: height,
             },
             fastStart: 'in-memory',
         };
-
-        if (this.audioList.length > 0) {
-            const [firstAudio] = this.audioList[0];
+        let firstAudio:AudioBuffer|null= null;
+        for(const t of storage.getTracks())if(t.type==ContentType.audio && t.contents.length != 0){firstAudio=t.contents[0].content.src as AudioBuffer;break;}//TODO dirty
+        if (firstAudio != null) {
             muxerOptions.audio = {
                 codec: 'aac',
                 numberOfChannels: firstAudio.numberOfChannels,
                 sampleRate: firstAudio.sampleRate,
             };
-            Logger.log(`Audio config: channels=${firstAudio.numberOfChannels}, sampleRate=${firstAudio.sampleRate}`);
         }
 
         const muxer = new Mp4Muxer.Muxer(muxerOptions);
@@ -201,12 +205,11 @@ export class VideoGenerator {
 
         const encoderConfig: VideoEncoderConfig = {
             codec: 'avc1.42001f',
-            width: this.videoWidth,
-            height: this.videoHeight,
+            width: width,
+            height: height,
             framerate: fps,
             bitrate: 8_000_000,
         };
-
         const support = await VideoEncoder.isConfigSupported(encoderConfig);
         if (!support.supported) {
             Logger.log('비디오 코덱이 지원되지 않습니다!');
@@ -214,24 +217,11 @@ export class VideoGenerator {
         }
         videoEncoder.configure(encoderConfig);
 
-        const gl = this.gl;
-        gl.uniform2f(this.resolutionLocation, this.videoWidth, this.videoHeight);
-
-        let totalVideoDuration = 0;
-        for(const line of this.videoLine)
-            for(const con of line.getContents()){
-                let end = con.start + con.duration;
-                totalVideoDuration = totalVideoDuration > end ? totalVideoDuration:end;
-            }
-
-        for(let timestamp=0; timestamp < totalVideoDuration; timestamp+=fps){
-            gl.clearColor(1, 1, 1.0, 1.0);
-            gl.clear(gl.COLOR_BUFFER_BIT);
-            for(const line of this.videoLine){
-                this.processLine(gl, line, timestamp);
-            }
+        //draw
+        for(let timestamp=0; timestamp < totalVideoDuration*1_000_000; timestamp+=1_000_000/fps){
+            this.drawImage(timestamp/1_000_000);
             const frame = new VideoFrame(this.canvas, {
-                timestamp: timestamp * 1_000_000,
+                timestamp: timestamp,
                 duration: fps,
             });
             videoEncoder.encode(frame, { keyFrame: true });
@@ -239,13 +229,14 @@ export class VideoGenerator {
         }
 
         // 마지막 프레임
-        const frame = new VideoFrame(this.canvas, { timestamp:totalVideoDuration, duration: 0 });
+        const frame = new VideoFrame(this.canvas, { timestamp:totalVideoDuration*1_000_000, duration: 0 });
         videoEncoder.encode(frame, { keyFrame: true });
         frame.close();
 
         await videoEncoder.flush();
 
-        if (this.audioList.length > 0) {
+        //audio
+        if (firstAudio != null) {
             const audioEncoder = new AudioEncoder({
                 output: (chunk: EncodedAudioChunk, meta: any) => {
                     muxer.addAudioChunk(chunk, meta);
@@ -255,7 +246,6 @@ export class VideoGenerator {
                 },
             });
 
-            const [firstAudio] = this.audioList[0];
             const audioConfig: AudioEncoderConfig = {
                 codec: 'mp4a.40.2',
                 numberOfChannels: firstAudio.numberOfChannels,
@@ -270,37 +260,46 @@ export class VideoGenerator {
             }
 
             audioEncoder.configure(audioConfig);
-            Logger.log(`Total video duration: ${totalVideoDuration / 1_000_000}s`);
-            for (const [audioBuffer, start, duration] of this.audioList) {
-                const sampleRate = audioBuffer.sampleRate;
-                const numberOfChannels = audioBuffer.numberOfChannels;
-                const audioDuration = Math.min(duration, audioBuffer.duration, (totalVideoDuration - start * 1_000_000) / 1_000_000) * 1_000_000;
-                const startTime = start * 1_000_000;
-                const numberOfFrames = Math.floor((audioDuration * sampleRate) / 1_000_000);
-                const channelData = new Float32Array(numberOfFrames * numberOfChannels);
-                for (let i = 0; i < numberOfChannels; i++) {
-                    const channel = audioBuffer.getChannelData(i);
-                    for (let j = 0; j < numberOfFrames; j++) {
-                        channelData[j * numberOfChannels + i] = j < channel.length ? channel[j] : 0;
+            
+            for(const track of tracks){
+                if(track.type != ContentType.audio)continue;
+                
+                for(const item of track.contents){
+                    const audioBuffer = item.content.src as AudioBuffer;
+                    const start = item.start;
+                    const duration = item.duration;
+                    
+                    const sampleRate = audioBuffer.sampleRate;
+                    const numberOfChannels = audioBuffer.numberOfChannels;
+                    const audioDuration = Math.min(duration, audioBuffer.duration, (totalVideoDuration - start * 1_000_000) / 1_000_000) * 1_000_000;
+                    const startTime = start * 1_000_000;
+                    const numberOfFrames = Math.floor((audioDuration * sampleRate) / 1_000_000);
+                    const channelData = new Float32Array(numberOfFrames * numberOfChannels);
+                    for (let i = 0; i < numberOfChannels; i++) {
+                        const channel = audioBuffer.getChannelData(i);
+                        for (let j = 0; j < numberOfFrames; j++) {
+                            channelData[j * numberOfChannels + i] = j < channel.length ? channel[j] : 0;
+                        }
                     }
+
+                    const audioData = new AudioData({
+                        format: 'f32',
+                        sampleRate,
+                        numberOfFrames,
+                        numberOfChannels,
+                        timestamp: startTime,
+                        data: channelData,
+                    });
+
+                    audioEncoder.encode(audioData);
+                    audioData.close();
                 }
-
-                const audioData = new AudioData({
-                    format: 'f32',
-                    sampleRate,
-                    numberOfFrames,
-                    numberOfChannels,
-                    timestamp: startTime,
-                    data: channelData,
-                });
-
-                audioEncoder.encode(audioData);
-                audioData.close();
             }
 
             await audioEncoder.flush();
         }
 
+        //
         muxer.finalize();
         videoEncoder.close();
 
