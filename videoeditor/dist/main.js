@@ -1,21 +1,24 @@
 import { VideoGenerator } from "./videoGenerator.js";
 import { Logger } from "./Logger.js";
 import { VideoProjectStorage, ContentType } from "./videotrack.js";
-let imageInput = document.getElementById('imageInput');
-let createVideoButton = document.getElementById('createvideo');
-let addTrackButton = document.getElementById('addtrackbutton');
-let downloadLink = document.getElementById('downloadLink');
-let audioInput = document.getElementById('audioInput');
+const imageInput = document.getElementById('imageInput');
+const createVideoButton = document.getElementById('createvideo');
+const addTrackButton = document.getElementById('addtrackbutton');
+const downloadLink = document.getElementById('downloadLink');
+const audioInput = document.getElementById('audioInput');
 const timelineNow = document.querySelector('.timeline-header .time');
 const timelineStart = document.getElementById('header-starttime');
 const timelineEnd = document.getElementById('header-endtime');
 const timelineTrakcs = document.getElementById('timeline-tracks');
-let sidebar = document.getElementById('sidebargrid');
-let canvas = document.getElementById('canvas');
+const sidebar = document.getElementById('sidebargrid');
+const canvas = document.getElementById('canvas');
+const playhead = document.getElementById('playhead');
+const timelineruler = document.getElementById('timelineruler');
 const storage = new VideoProjectStorage();
 const videoGenerator = new VideoGenerator(storage, canvas);
+let tlStart = 0;
+let tlEnd = 0;
 drawStorage(storage);
-changeTimeline(0, 30, 3);
 imageInput.addEventListener('change', handleImageInput.bind(this));
 audioInput.addEventListener('change', handleAudioInput);
 addTrackButton.addEventListener('click', clickAddLineButton.bind(this));
@@ -27,10 +30,24 @@ createVideoButton.addEventListener('click', async () => {
         console.error('Video creation failed:', error);
     }
 });
+let isRulerDragging = false;
+timelineruler.draggable = false;
+timelineruler.addEventListener('mousedown', (e) => {
+    isRulerDragging = true;
+    controlTimeline(e);
+});
+timelineruler.addEventListener('mousemove', (e) => {
+    if (isRulerDragging) {
+        controlTimeline(e);
+    }
+});
+timelineruler.addEventListener('mouseup', () => {
+    isRulerDragging = false;
+});
+timelineruler.addEventListener('mouseleave', () => {
+    isRulerDragging = false;
+});
 function drawStorage(storage) {
-    let now = 0;
-    changeTimeline(0, storage.getVideoEndTime() + 5, now);
-    videoGenerator.drawImage(now);
     sidebar.innerHTML = '';
     for (const content of storage.getContents()) {
         drawContent(content.name, content.id, content.type);
@@ -44,6 +61,7 @@ function drawStorage(storage) {
         }
         setupDragAndDrop(sidebar, trackDiv);
     }
+    changeTimeline(0, storage.getVideoEndTime() + 5, 0);
 }
 function handleClickTrack() {
 }
@@ -95,6 +113,8 @@ async function handleImageInput(event) {
         }
     }
 }
+async function handleControlRuler() {
+}
 async function handleAudioInput(event) {
     const files = event.target.files;
     if (files === null)
@@ -139,6 +159,9 @@ function changeTimeline(start, end, now) {
     timelineNow.textContent = now.toString();
     timelineStart.textContent = start.toString();
     timelineEnd.textContent = end.toString();
+    tlStart = start;
+    tlEnd = end;
+    videoGenerator.drawImage(now);
 }
 function createVideoTrackDiv(name, id) {
     const trackDiv = document.createElement('div');
@@ -222,4 +245,14 @@ function renderVideoTrackItem(content, track) {
     if (contentArea) {
         contentArea.appendChild(contentDiv);
     }
+}
+function controlTimeline(e) {
+    const rect = timelineruler.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    playhead.style.left = `${x}px`;
+    console.log(tlStart, tlEnd, x, rect.right);
+    let now = tlStart + (x / (rect.right - rect.left)) * (tlEnd - tlStart);
+    if (now < 0)
+        now = 0;
+    changeTimeline(tlStart, tlEnd, now);
 }

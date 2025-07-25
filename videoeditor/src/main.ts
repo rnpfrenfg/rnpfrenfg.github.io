@@ -2,24 +2,27 @@ import {VideoGenerator} from "./videoGenerator.js";
 import { Logger } from "./Logger.js";
 import {VideoProjectStorage,VideoTrackItem,VideoTrack,ContentType,Content,ContentEffect } from "./videotrack.js";
 
-let imageInput: HTMLInputElement = document.getElementById('imageInput') as HTMLInputElement;
-let createVideoButton: HTMLButtonElement = document.getElementById('createvideo') as HTMLButtonElement;
-let addTrackButton: HTMLButtonElement = document.getElementById('addtrackbutton') as HTMLButtonElement;
-let downloadLink: HTMLAnchorElement = document.getElementById('downloadLink') as HTMLAnchorElement;
-let audioInput: HTMLInputElement = document.getElementById('audioInput') as HTMLInputElement;
+const imageInput: HTMLInputElement = document.getElementById('imageInput') as HTMLInputElement;
+const createVideoButton: HTMLButtonElement = document.getElementById('createvideo') as HTMLButtonElement;
+const addTrackButton: HTMLButtonElement = document.getElementById('addtrackbutton') as HTMLButtonElement;
+const downloadLink: HTMLAnchorElement = document.getElementById('downloadLink') as HTMLAnchorElement;
+const audioInput: HTMLInputElement = document.getElementById('audioInput') as HTMLInputElement;
 const timelineNow = document.querySelector('.timeline-header .time') as HTMLDivElement;
 const timelineStart = document.getElementById('header-starttime') as HTMLDivElement;
 const timelineEnd = document.getElementById('header-endtime') as HTMLDivElement;
 const timelineTrakcs: HTMLDivElement = document.getElementById('timeline-tracks') as HTMLDivElement;
-let sidebar: HTMLDivElement = document.getElementById('sidebargrid') as HTMLDivElement;
-let canvas: HTMLCanvasElement = document.getElementById('canvas') as HTMLCanvasElement;
+const sidebar: HTMLDivElement = document.getElementById('sidebargrid') as HTMLDivElement;
+const canvas: HTMLCanvasElement = document.getElementById('canvas') as HTMLCanvasElement;
+const playhead: HTMLDivElement = document.getElementById('playhead') as HTMLDivElement;
+const timelineruler: HTMLDivElement = document.getElementById('timelineruler') as HTMLDivElement;
 
 const storage: VideoProjectStorage = new VideoProjectStorage();
 const videoGenerator: VideoGenerator = new VideoGenerator(storage,canvas);
 
-drawStorage(storage);
+let tlStart = 0;
+let tlEnd = 0;
 
-changeTimeline(0,30,3);
+drawStorage(storage);
 
 imageInput.addEventListener('change', handleImageInput.bind(this));
 audioInput.addEventListener('change', handleAudioInput);
@@ -31,12 +34,26 @@ createVideoButton.addEventListener('click', async () => {
         console.error('Video creation failed:', error);
     }
 });
+let isRulerDragging = false;
+timelineruler.draggable=false;
+timelineruler.addEventListener('mousedown', (e: MouseEvent) => {
+    isRulerDragging = true;
+    controlTimeline(e);
+});
+timelineruler.addEventListener('mousemove', (e: MouseEvent) => {
+    if (isRulerDragging) {
+        controlTimeline(e);
+    }
+});
+timelineruler.addEventListener('mouseup', () => {
+    isRulerDragging = false;
+});
+
+timelineruler.addEventListener('mouseleave', () => {
+    isRulerDragging = false;
+});
 
 function drawStorage(storage: VideoProjectStorage){
-    let now = 0;
-    changeTimeline(0,storage.getVideoEndTime() + 5, now);
-    videoGenerator.drawImage(now);
-
     sidebar.innerHTML='';
     for(const content of storage.getContents()){
         drawContent(content.name,content.id,content.type);
@@ -52,6 +69,8 @@ function drawStorage(storage: VideoProjectStorage){
         
         setupDragAndDrop(sidebar, trackDiv);
     }
+
+    changeTimeline(0,storage.getVideoEndTime() + 5, 0);
 }
 
 function handleClickTrack(){
@@ -116,6 +135,10 @@ async function handleImageInput(event: Event): Promise<void> {
     }
 }
 
+async function handleControlRuler(){
+
+}
+
 async function handleAudioInput(event: Event): Promise<void> {
     const files = (event.target as HTMLInputElement).files;
     if(files===null)return;
@@ -164,6 +187,10 @@ function changeTimeline(start: number, end: number, now: number) {
     timelineNow.textContent=now.toString();
     timelineStart.textContent=start.toString();
     timelineEnd.textContent=end.toString();
+
+    tlStart = start;
+    tlEnd = end;
+    videoGenerator.drawImage(now);
 }
 
 function createVideoTrackDiv(name: string, id: string): HTMLDivElement {
@@ -261,4 +288,15 @@ function renderVideoTrackItem(content: VideoTrackItem, track: HTMLDivElement) {
     if (contentArea) {
         contentArea.appendChild(contentDiv);
     }
+}
+
+function controlTimeline(e: MouseEvent){
+    const rect = timelineruler.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    playhead.style.left = `${x}px`;
+
+    console.log(tlStart,tlEnd,x,rect.right);
+    let now = tlStart + (x/(rect.right-rect.left))*(tlEnd-tlStart);
+    if(now<0)now=0;
+    changeTimeline(tlStart, tlEnd, now)
 }
