@@ -118,11 +118,6 @@ export class VideoGenerator {
 
                 if (ContentEffect.DEFAULT === ContentEffect.DEFAULT) {
                     const image:HTMLImageElement = con.content.src as HTMLImageElement;
-                    const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
-                    const scaledWidth = image.naturalWidth * scale;
-                    const scaledHeight = image.naturalHeight * scale;
-                    const offsetX = (width - scaledWidth) / 2;
-                    const offsetY = (height - scaledHeight) / 2;
 
                     const texture = gl.createTexture();
                     gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -131,8 +126,8 @@ export class VideoGenerator {
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-                    gl.uniform2f(this.positionUniformLocation, offsetX, offsetY);
-                    gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
+                    gl.uniform2f(this.positionUniformLocation, con.x, con.y);
+                    gl.uniform2f(this.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
                     gl.uniform1i(this.imageLocation, 0);
                     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
                     
@@ -147,12 +142,6 @@ export class VideoGenerator {
                 const video: HTMLVideoElement = con.content.src as HTMLVideoElement;
                 video.currentTime = (now - con.start);
                 video.muted = true;
-
-                const scale = Math.min(width / video.videoWidth, height / video.videoHeight);
-                const scaledWidth = video.videoWidth * scale;
-                const scaledHeight = video.videoHeight * scale;
-                const offsetX = (width - scaledWidth) / 2;
-                const offsetY = (height - scaledHeight) / 2;
 
                 const offscreen = new OffscreenCanvas(video.videoWidth, video.videoHeight);
                 const ctx = offscreen.getContext('2d')!;
@@ -169,8 +158,8 @@ export class VideoGenerator {
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-                gl.uniform2f(this.positionUniformLocation, offsetX, offsetY);
-                gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
+                gl.uniform2f(this.positionUniformLocation, con.x, con.y);
+                gl.uniform2f(this.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
                 gl.uniform1i(this.imageLocation, 0);
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 

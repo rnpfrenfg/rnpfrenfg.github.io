@@ -1,6 +1,6 @@
 import { VideoGenerator } from "./videoGenerator.js";
 import { Logger } from "./Logger.js";
-import { VideoProjectStorage, VideoTrack, ContentType } from "./videotrack.js";
+import { VideoProjectStorage, ContentType } from "./videotrack.js";
 var PropertyType;
 (function (PropertyType) {
     PropertyType[PropertyType["TrackItem"] = 0] = "TrackItem";
@@ -23,6 +23,11 @@ const storage = new VideoProjectStorage();
 const videoGenerator = new VideoGenerator(storage, canvas);
 let selectedElement = null; // for property
 let selectedElementType = PropertyType.TrackItem;
+//for mousemove on canvas
+let selectedTrackItem;
+let isDragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
 let tlStart = 0;
 let tlEnd = 0;
 let tlNow = 0;
@@ -82,6 +87,64 @@ timelineTrakcs.addEventListener('click', (e) => {
         updatePropertiesPanel(target);
     }
 });
+canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    console.log(x, y, e, rect);
+    const hitItem = findItemAtPosition(x, y, tlNow);
+    if (hitItem) {
+        selectedTrackItem = hitItem;
+        selectedElement = null;
+        selectedElementType = PropertyType.TrackItem;
+        updatePropertiesPanelForTrackItem(hitItem);
+    }
+    else {
+        clearProperty();
+    }
+});
+canvas.addEventListener('mousedown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const hitItem = findItemAtPosition(x, y, tlNow);
+    if (hitItem) {
+        selectedTrackItem = hitItem;
+        selectedElementType = PropertyType.TrackItem;
+        updatePropertiesPanelForTrackItem(hitItem);
+        isDragging = true;
+        dragStartX = x - hitItem.x;
+        dragStartY = y - hitItem.y;
+    }
+});
+canvas.addEventListener('mousemove', (e) => {
+    if (!isDragging)
+        return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (selectedTrackItem) {
+        const newX = x - dragStartX;
+        const newY = y - dragStartY;
+        selectedTrackItem.x = newX;
+        selectedTrackItem.y = newY;
+        updatePropertiesPanelForTrackItem(selectedTrackItem);
+    }
+});
+canvas.addEventListener('mouseup', () => {
+    if (isDragging)
+        videoGenerator.drawImage(tlNow);
+    isDragging = false;
+});
+canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (!selectedTrackItem)
+        return;
+    const delta = e.deltaY > 0 ? -1 : 1;
+    selectedTrackItem.scale = selectedTrackItem.scale + selectedTrackItem.scale * 0.1 * delta;
+    videoGenerator.drawImage(tlNow);
+    updatePropertiesPanelForTrackItem(selectedTrackItem);
+});
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Delete' && selectedElement) {
         e.preventDefault();
@@ -121,68 +184,6 @@ document.addEventListener('keydown', (e) => {
         }
     }
 });
-document.getElementById('saveToFileButton').addEventListener('click', await saveToFile);
-document.getElementById('loadFromFileButton').addEventListener('click', () => loadFromFile().catch(err => console.error('Load failed:', err)));
-async function saveToFile() {
-    const fileHandle = await window.showSaveFilePicker({
-        suggestedName: `project_${Date.now()}.json`,
-        types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
-    });
-    const writable = await fileHandle.createWritable();
-    const storageData = {
-        tracks: storage.getTracks().map(track => ({
-            id: track.id,
-            name: track.name,
-            type: track.type,
-            contents: track.contents.map(item => ({
-                id: item.id,
-                contentId: item.content.id,
-                start: item.start,
-                duration: item.duration
-            }))
-        })),
-        contents: storage.getContents().map(content => ({
-            id: content.id,
-            name: content.name,
-            type: content.type,
-            src: content.src instanceof Image ? content.src.src : content.src
-        }))
-    };
-    await writable.write(JSON.stringify(storageData, null, 2));
-    await writable.close();
-    console.log('Saved to file');
-}
-async function loadFromFile() {
-    const [fileHandle] = await window.showOpenFilePicker({
-        types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
-    });
-    const file = await fileHandle.getFile();
-    const text = await file.text();
-    const data = JSON.parse(text);
-    storage.getTracks().length = 0;
-    storage.getContents().length = 0;
-    data.tracks.forEach((trackData) => {
-        const track = new VideoTrack(trackData.id, trackData.type, trackData.name);
-        trackData.contents.forEach((item) => {
-            const content = data.contents.find((c) => c.id === item.contentId);
-            if (content) {
-                track.contents.push({
-                    id: item.id,
-                    content: { id: content.id, name: content.name, type: content.type, src: content.src },
-                    start: item.start,
-                    duration: item.duration
-                });
-            }
-        });
-        storage.getTracks().push(track);
-    });
-    data.contents.forEach((contentData) => {
-        const content = { id: contentData.id, name: contentData.name, type: contentData.type, src: contentData.src };
-        storage.getContents().push(content);
-    });
-    drawStorage(storage);
-    console.log('Loaded from file');
-}
 function drawStorage(storage) {
     sidebar.innerHTML = '';
     for (const content of storage.getContents()) {
@@ -199,21 +200,11 @@ function drawStorage(storage) {
 }
 function updatePropertiesPanel(element) {
     if (selectedElementType === PropertyType.TrackItem) {
-        const trackItem = storage.getTracks()
-            .flatMap(track => track.contents)
-            .find(item => item.id === element.id);
-        const duration = trackItem ? trackItem.duration : 2;
-        const startTime = trackItem ? trackItem.start : 0;
-        property.innerHTML = `
-            <div>
-                <label>Duration (s):</label>
-                <input type="number" step="0.1" value="${duration}" data-prop="duration">
-            </div>
-            <div>
-                <label>Start Time (s):</label>
-                <input type="number" step="0.1" value="${startTime}" data-prop="startTime">
-            </div>
-        `;
+        const res = storage.getIteamOfTrack(element.id);
+        if (res == null)
+            return;
+        const [track, trackItem] = res;
+        updatePropertiesPanelForTrackItem(trackItem);
     }
     else if (selectedElementType === PropertyType.trackheader) {
         const track = storage.getVideoTrack(element.id);
@@ -250,6 +241,34 @@ function updatePropertiesPanel(element) {
     applyButton.addEventListener('click', applyPropertyChange);
     property.appendChild(applyButton);
 }
+function updatePropertiesPanelForTrackItem(trackItem) {
+    property.innerHTML = `
+        <div>
+            <label>Duration (s):</label>
+            <input type="number" step="0.1" value="${trackItem.duration}" data-prop="duration">
+        </div>
+        <div>
+            <label>Start Time (s):</label>
+            <input type="number" step="0.1" value="${trackItem.start}" data-prop="startTime">
+        </div>
+        <div>
+            <label>X:</label>
+            <input type="number" step="0.1" value="${trackItem.x}" data-prop="x">
+        </div>
+        <div>
+            <label>Y:</label>
+            <input type="number" step="0.1" value="${trackItem.y}" data-prop="y">
+        </div>
+        <div>
+            <label>Scale:</label>
+            <input type="number" step="0.1" value="${trackItem.scale}" data-prop="scale">
+        </div>
+    `;
+    const applyButton = document.createElement('button');
+    applyButton.textContent = 'Apply';
+    applyButton.addEventListener('click', applyPropertyChange);
+    property.appendChild(applyButton);
+}
 function applyPropertyChange() {
     if (!selectedElement)
         return;
@@ -264,9 +283,20 @@ function applyPropertyChange() {
         }
     });
     if (selectedElementType === PropertyType.TrackItem) {
-        const duration = properties['duration'];
-        const startTime = properties['startTime'];
-        storage.editTrackItem(id, parseFloat(startTime), parseFloat(duration));
+        const duration = parseFloat(properties['duration']);
+        const startTime = parseFloat(properties['startTime']);
+        const x = parseFloat(properties['x']);
+        const y = parseFloat(properties['y']);
+        const scale = parseFloat(properties['scale']);
+        const res = storage.getIteamOfTrack(id);
+        if (res == null)
+            return;
+        const [track, item] = res;
+        item.start = startTime;
+        item.duration = duration; // TODO : 근처 아이템 시간 밀기
+        item.x = x;
+        item.y = y;
+        item.scale = scale;
         drawStorage(storage);
     }
     else if (selectedElementType === PropertyType.trackheader) {
@@ -321,7 +351,7 @@ async function handleImageInput(event) {
             const img = new Image();
             img.src = URL.createObjectURL(file);
             await new Promise(resolve => img.onload = resolve);
-            storage.createContent(ContentType.image, img, file.name);
+            storage.createContent(ContentType.image, img, file.name, img.naturalWidth, img.naturalHeight);
             drawStorage(storage);
         }
         else {
@@ -343,7 +373,7 @@ async function handleAudioInput(event) {
             const arrayBuffer = await file.arrayBuffer();
             const audioContext = new AudioContext();
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-            storage.createContent(ContentType.audio, audioBuffer, file.name);
+            storage.createContent(ContentType.audio, audioBuffer, file.name, 0, 0);
             Logger.log('오디오 파일이 업로드되었습니다.');
         }
         catch (e) {
@@ -363,7 +393,7 @@ async function handleMp4Input(event) {
         const video = document.createElement('video');
         video.src = videoUrl;
         await new Promise(resolve => video.onloadedmetadata = resolve);
-        storage.createContent(ContentType.mp4, video, file.name);
+        storage.createContent(ContentType.mp4, video, file.name, video.videoWidth, video.videoHeight);
         drawStorage(storage);
     }
 }
@@ -487,7 +517,14 @@ function setupDragAndDrop(timeline) {
             const trackID = timeline.id;
             const content = storage.getContent(draggedItem.id);
             if (content) {
-                storage.addContentToTrack(trackID, content, 2);
+                const width = content.width;
+                const height = content.height;
+                const scale = Math.min(storage.getWidth() / width, storage.getHeight() / height);
+                const scaledWidth = width * scale;
+                const scaledHeight = height * scale;
+                const offsetX = (storage.getWidth() - scaledWidth) / 2;
+                const offsetY = (storage.getHeight() - scaledHeight) / 2;
+                storage.addContentToTrack(trackID, content, 2, offsetX, offsetY, scale);
                 drawStorage(storage);
             }
             draggedItem = null;
@@ -520,4 +557,32 @@ function videoTimeToClient(now) {
     const rect = timelineruler.getBoundingClientRect();
     const ret = ((now - tlStart) / (tlEnd - tlStart)) * (rect.right - rect.left);
     return ret;
+}
+function findItemAtPosition(x, y, now) {
+    const rect = canvas.getBoundingClientRect();
+    const canvasWidth = rect.width;
+    const canvasHeight = rect.height;
+    const storageWidth = storage.getWidth();
+    const storageHeight = storage.getHeight();
+    const scaleX = storageWidth / canvasWidth;
+    const scaleY = storageHeight / canvasHeight;
+    const storageX = x * scaleX;
+    const storageY = y * scaleY;
+    for (const track of storage.getTracks()) {
+        if (track.type === ContentType.image || track.type === ContentType.mp4) {
+            for (const item of track.contents) {
+                if (item.start <= now && now < item.start + item.duration) {
+                    const scaledWidth = item.content.width * item.scale;
+                    const scaledHeight = item.content.height * item.scale;
+                    if (storageX >= item.x &&
+                        storageX <= item.x + scaledWidth &&
+                        storageY >= item.y &&
+                        storageY <= item.y + scaledHeight) {
+                        return item;
+                    }
+                }
+            }
+        }
+    }
+    return null;
 }

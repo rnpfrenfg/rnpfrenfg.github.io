@@ -14,6 +14,9 @@ export interface Content {
     name: string;
     type: ContentType;
     src: any;
+
+    width: number;
+    height: number;
 }
 
 export interface VideoTrackItem{
@@ -21,6 +24,10 @@ export interface VideoTrackItem{
     content: Content;
     start: number;
     duration: number;
+    
+    x: number;
+    y: number;
+    scale:number;
 }
 
 export class VideoTrack{
@@ -70,14 +77,9 @@ export class VideoProjectStorage{
         return track;
     }
 
-    public createContent(type:ContentType, src: any, name: string):Content{
+    public createContent(type:ContentType, src: any, name: string, width:number, height:number):Content{
         const id = this.createUID();
-        let content:Content = {
-            id:id,
-            name: name,
-            type,
-            src
-        };
+        let content:Content = {id,name,type,src,width,height };
         this.contents.push(content);
         return content;
     }
@@ -86,28 +88,23 @@ export class VideoProjectStorage{
         return this.tracks.reduce((max, track) => Math.max(max, track.getEndtime()), 0);
     }
 
-    public addContentToTrackacc(trackID:string, con: Content, start:number, duration:number){
-        const track = this.getVideoTrack(trackID);
-        if(track === null)return;
-
-        if(track.type != con.type)return;
-        track.contents.push({content:con,start:start,id:this.createUID(),duration:duration});
-    }
-    public addContentToTrack(trackID:string, con: Content, duration: number){
+    public addContentToTrack(trackID:string, con: Content, duration: number, x:number ,y:number, scale:number){
         const track = this.getVideoTrack(trackID);
         if(track === null)return;
 
         if(track.type != con.type)return;
         let end = track.getEndtime();
-        track.contents.push({content:con,start:end,id:this.createUID(),duration:2});
+        track.contents.push({content:con,start:end,id:this.createUID(),duration,x,y, scale});
     }
+
     public getVideoTrack(id: string):VideoTrack | null{
         for(const d of this.tracks)if(d.id == id)return d;
         return null;
     }
+
     public getContent(id:string):Content|null{for(const d of this.contents)if(d.id==id)return d;return null;}
 
-    public getTrackOfItem(id: string) : [VideoTrack, VideoTrackItem] | null{
+    public getIteamOfTrack(id: string) : [VideoTrack, VideoTrackItem] | null{
         for(const track of this.getTracks()){
             for(const item of track.contents)
                 if(item.id === id){
@@ -115,14 +112,6 @@ export class VideoProjectStorage{
                 }
         }
         return null;
-    }
-
-    public editTrackItem(id: string, start:number, duration:number){
-        const res = this.getTrackOfItem(id);
-        if(res== null)return;
-        const [track, item] = res;
-        item.start = start;
-        item.duration = duration; // TODO : 근처 아이템 시간 밀기
     }
 
     private createUID(): string{

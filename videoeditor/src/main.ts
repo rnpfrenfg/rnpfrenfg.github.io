@@ -24,6 +24,12 @@ const videoGenerator: VideoGenerator = new VideoGenerator(storage,canvas);
 let selectedElement: HTMLElement | null = null;// for property
 let selectedElementType: PropertyType = PropertyType.TrackItem;
 
+//for mousemove on canvas
+let selectedTrackItem: VideoTrackItem;
+let isDragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+
 let tlStart = 0;
 let tlEnd = 0;
 let tlNow = 0;
@@ -85,6 +91,68 @@ timelineTrakcs.addEventListener('click', (e: MouseEvent) => {
     }
 });
 
+canvas.addEventListener('click', (e: MouseEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    console.log(x,y,e,rect);
+
+    const hitItem = findItemAtPosition(x, y, tlNow);
+    if (hitItem) {
+        selectedTrackItem = hitItem;
+        selectedElement = null;
+        selectedElementType = PropertyType.TrackItem;
+        updatePropertiesPanelForTrackItem(hitItem);
+    } else {
+        clearProperty();
+    }
+});
+canvas.addEventListener('mousedown', (e: MouseEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const hitItem = findItemAtPosition(x, y, tlNow);
+    if (hitItem) {
+        selectedTrackItem = hitItem;
+        selectedElementType = PropertyType.TrackItem;
+        updatePropertiesPanelForTrackItem(hitItem);
+        isDragging = true;
+        dragStartX = x - hitItem.x;
+        dragStartY = y - hitItem.y;
+    }
+});
+canvas.addEventListener('mousemove', (e: MouseEvent) => {
+    if (!isDragging) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    if (selectedTrackItem) {
+        const newX = x - dragStartX;
+        const newY = y - dragStartY;
+        selectedTrackItem.x = newX;
+        selectedTrackItem.y = newY;
+
+        updatePropertiesPanelForTrackItem(selectedTrackItem);
+    }
+});
+canvas.addEventListener('mouseup', () => {
+    if(isDragging)videoGenerator.drawImage(tlNow);
+    isDragging = false;
+});
+canvas.addEventListener('wheel', (e: WheelEvent) => {
+    e.preventDefault();
+    if (!selectedTrackItem) return;
+
+    const delta = e.deltaY > 0 ? -1 : 1;
+    selectedTrackItem.scale = selectedTrackItem.scale + selectedTrackItem.scale *0.1 *delta;
+
+    videoGenerator.drawImage(tlNow);
+    updatePropertiesPanelForTrackItem(selectedTrackItem);
+});
+
 document.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key === 'Delete' && selectedElement) {
         e.preventDefault();
@@ -142,21 +210,10 @@ function drawStorage(storage: VideoProjectStorage){
 function updatePropertiesPanel(element: HTMLElement) {
 
     if (selectedElementType === PropertyType.TrackItem) {
-        const trackItem = storage.getTracks()
-            .flatMap(track => track.contents)
-            .find(item => item.id === element.id);
-        const duration = trackItem ? trackItem.duration : 2;
-        const startTime = trackItem ? trackItem.start : 0;
-        property.innerHTML = `
-            <div>
-                <label>Duration (s):</label>
-                <input type="number" step="0.1" value="${duration}" data-prop="duration">
-            </div>
-            <div>
-                <label>Start Time (s):</label>
-                <input type="number" step="0.1" value="${startTime}" data-prop="startTime">
-            </div>
-        `;
+        const res = storage.getIteamOfTrack(element.id);
+        if(res == null)return;
+        const [track, trackItem] = res;
+        updatePropertiesPanelForTrackItem(trackItem);
     } else if (selectedElementType === PropertyType.trackheader) {
         const track = storage.getVideoTrack(element.id);
         const name = track ? track.name : 'Track';
@@ -193,6 +250,36 @@ function updatePropertiesPanel(element: HTMLElement) {
     property.appendChild(applyButton);
 }
 
+function updatePropertiesPanelForTrackItem(trackItem: VideoTrackItem) {
+    property.innerHTML = `
+        <div>
+            <label>Duration (s):</label>
+            <input type="number" step="0.1" value="${trackItem.duration}" data-prop="duration">
+        </div>
+        <div>
+            <label>Start Time (s):</label>
+            <input type="number" step="0.1" value="${trackItem.start}" data-prop="startTime">
+        </div>
+        <div>
+            <label>X:</label>
+            <input type="number" step="0.1" value="${trackItem.x}" data-prop="x">
+        </div>
+        <div>
+            <label>Y:</label>
+            <input type="number" step="0.1" value="${trackItem.y}" data-prop="y">
+        </div>
+        <div>
+            <label>Scale:</label>
+            <input type="number" step="0.1" value="${trackItem.scale}" data-prop="scale">
+        </div>
+    `;
+
+    const applyButton = document.createElement('button');
+    applyButton.textContent = 'Apply';
+    applyButton.addEventListener('click', applyPropertyChange);
+    property.appendChild(applyButton);
+}
+
 function applyPropertyChange() {//todo : if storage size big >>> 
     if (!selectedElement) return;
 
@@ -209,10 +296,21 @@ function applyPropertyChange() {//todo : if storage size big >>>
     });
 
     if (selectedElementType === PropertyType.TrackItem) {
-        const duration = properties['duration'];
-        const startTime = properties['startTime'];
+        const duration = parseFloat(properties['duration']);
+        const startTime = parseFloat(properties['startTime']);
+        const x = parseFloat(properties['x']);
+        const y = parseFloat(properties['y']);
+        const scale = parseFloat(properties['scale']);
+        
+        const res = storage.getIteamOfTrack(id);
+        if(res== null)return;
+        const [track, item] = res;
+        item.start = startTime;
+        item.duration = duration; // TODO : 근처 아이템 시간 밀기
+        item.x=x;
+        item.y=y;
+        item.scale=scale;
 
-        storage.editTrackItem(id,parseFloat(startTime),parseFloat(duration));
         drawStorage(storage);
     } else if (selectedElementType === PropertyType.trackheader) {
         const name = properties['name'];
@@ -271,7 +369,7 @@ async function handleImageInput(event: Event): Promise<void> {
             const img = new Image();
             img.src = URL.createObjectURL(file);
             await new Promise(resolve => img.onload = resolve);
-            storage.createContent(ContentType.image, img, file.name);
+            storage.createContent(ContentType.image, img, file.name, img.naturalWidth,img.naturalHeight);
             drawStorage(storage);
         }
         else{
@@ -295,7 +393,7 @@ async function handleAudioInput(event: Event): Promise<void> {
             const arrayBuffer = await file.arrayBuffer();
             const audioContext = new AudioContext();
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-            storage.createContent(ContentType.audio,audioBuffer, file.name);
+            storage.createContent(ContentType.audio,audioBuffer, file.name,0,0);
             Logger.log('오디오 파일이 업로드되었습니다.');
         } catch (e) {
             Logger.log('오디오 로딩 실패:', (e as Error).message);
@@ -315,7 +413,7 @@ async function handleMp4Input(event: Event) {
         const video = document.createElement('video');
         video.src = videoUrl;
         await new Promise(resolve => video.onloadedmetadata = resolve);
-        storage.createContent(ContentType.mp4,video,file.name);
+        storage.createContent(ContentType.mp4,video,file.name, video.videoWidth, video.videoHeight);
         drawStorage(storage);
     }
 }
@@ -454,7 +552,15 @@ function setupDragAndDrop(timeline: HTMLDivElement) {
             const trackID = timeline.id;
             const content = storage.getContent(draggedItem.id);
             if (content) {
-                storage.addContentToTrack(trackID,content, 2);
+                const width = content.width;
+                const height = content.height
+                const scale = Math.min(storage.getWidth() / width, storage.getHeight()/height);
+                const scaledWidth =  width * scale;
+                const scaledHeight = height * scale;
+                const offsetX = (storage.getWidth() - scaledWidth) / 2;
+                const offsetY = (storage.getHeight() - scaledHeight) / 2;
+                
+                storage.addContentToTrack(trackID,content, 2,offsetX,offsetY,scale);
                 drawStorage(storage);
             }
             draggedItem = null;
@@ -490,4 +596,37 @@ function videoTimeToClient(now: number){
     const rect = timelineruler.getBoundingClientRect();
     const ret = ((now-tlStart)/(tlEnd-tlStart))*(rect.right-rect.left);
     return ret;
+}
+
+function findItemAtPosition(x: number, y: number, now: number): VideoTrackItem | null {
+    const rect = canvas.getBoundingClientRect();
+    const canvasWidth = rect.width;
+    const canvasHeight = rect.height;
+    const storageWidth = storage.getWidth();
+    const storageHeight = storage.getHeight();
+
+    const scaleX = storageWidth / canvasWidth;
+    const scaleY = storageHeight / canvasHeight;
+    const storageX = x * scaleX;
+    const storageY = y * scaleY;
+
+    for (const track of storage.getTracks()) {
+        if (track.type === ContentType.image || track.type === ContentType.mp4) {
+            for (const item of track.contents) {
+                if (item.start <= now && now < item.start + item.duration) {
+                    const scaledWidth = item.content.width * item.scale;
+                    const scaledHeight = item.content.height * item.scale;
+                    if (
+                        storageX >= item.x &&
+                        storageX <= item.x + scaledWidth &&
+                        storageY >= item.y &&
+                        storageY <= item.y + scaledHeight
+                    ) {
+                        return item;
+                    }
+                }
+            }
+        }
+    }
+    return null;
 }

@@ -98,19 +98,14 @@ export class VideoGenerator {
                     continue;
                 if (ContentEffect.DEFAULT === ContentEffect.DEFAULT) {
                     const image = con.content.src;
-                    const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
-                    const scaledWidth = image.naturalWidth * scale;
-                    const scaledHeight = image.naturalHeight * scale;
-                    const offsetX = (width - scaledWidth) / 2;
-                    const offsetY = (height - scaledHeight) / 2;
                     const texture = gl.createTexture();
                     gl.bindTexture(gl.TEXTURE_2D, texture);
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                    gl.uniform2f(this.positionUniformLocation, offsetX, offsetY);
-                    gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
+                    gl.uniform2f(this.positionUniformLocation, con.x, con.y);
+                    gl.uniform2f(this.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
                     gl.uniform1i(this.imageLocation, 0);
                     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
                     gl.deleteTexture(texture);
@@ -119,19 +114,11 @@ export class VideoGenerator {
         }
         else if (line.type === ContentType.mp4) {
             for (const con of line.contents) {
-                if (!(con.start <= now && now < con.start + con.duration)) {
-                    console.log(Date.now(), '시간,   ', !(con.start <= now && now < con.start + con.duration), 'dd', con.start, con.duration, now, con.start + con.duration, "NOW: ", now);
-                }
                 if (!(con.start <= now && now < con.start + con.duration))
                     continue;
                 const video = con.content.src;
                 video.currentTime = (now - con.start);
                 video.muted = true;
-                const scale = Math.min(width / video.videoWidth, height / video.videoHeight);
-                const scaledWidth = video.videoWidth * scale;
-                const scaledHeight = video.videoHeight * scale;
-                const offsetX = (width - scaledWidth) / 2;
-                const offsetY = (height - scaledHeight) / 2;
                 const offscreen = new OffscreenCanvas(video.videoWidth, video.videoHeight);
                 const ctx = offscreen.getContext('2d');
                 video.currentTime = (now - con.start);
@@ -145,8 +132,8 @@ export class VideoGenerator {
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                gl.uniform2f(this.positionUniformLocation, offsetX, offsetY);
-                gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
+                gl.uniform2f(this.positionUniformLocation, con.x, con.y);
+                gl.uniform2f(this.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
                 gl.uniform1i(this.imageLocation, 0);
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
                 gl.deleteTexture(texture);

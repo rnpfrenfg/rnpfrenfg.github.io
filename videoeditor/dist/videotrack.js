@@ -41,36 +41,23 @@ export class VideoProjectStorage {
         this.tracks.push(track);
         return track;
     }
-    createContent(type, src, name) {
+    createContent(type, src, name, width, height) {
         const id = this.createUID();
-        let content = {
-            id: id,
-            name: name,
-            type,
-            src
-        };
+        let content = { id, name, type, src, width, height };
         this.contents.push(content);
         return content;
     }
     getVideoEndTime() {
         return this.tracks.reduce((max, track) => Math.max(max, track.getEndtime()), 0);
     }
-    addContentToTrackacc(trackID, con, start, duration) {
-        const track = this.getVideoTrack(trackID);
-        if (track === null)
-            return;
-        if (track.type != con.type)
-            return;
-        track.contents.push({ content: con, start: start, id: this.createUID(), duration: duration });
-    }
-    addContentToTrack(trackID, con, duration) {
+    addContentToTrack(trackID, con, duration, x, y, scale) {
         const track = this.getVideoTrack(trackID);
         if (track === null)
             return;
         if (track.type != con.type)
             return;
         let end = track.getEndtime();
-        track.contents.push({ content: con, start: end, id: this.createUID(), duration: 2 });
+        track.contents.push({ content: con, start: end, id: this.createUID(), duration, x, y, scale });
     }
     getVideoTrack(id) {
         for (const d of this.tracks)
@@ -81,7 +68,7 @@ export class VideoProjectStorage {
     getContent(id) { for (const d of this.contents)
         if (d.id == id)
             return d; return null; }
-    getTrackOfItem(id) {
+    getIteamOfTrack(id) {
         for (const track of this.getTracks()) {
             for (const item of track.contents)
                 if (item.id === id) {
@@ -89,14 +76,6 @@ export class VideoProjectStorage {
                 }
         }
         return null;
-    }
-    editTrackItem(id, start, duration) {
-        const res = this.getTrackOfItem(id);
-        if (res == null)
-            return;
-        const [track, item] = res;
-        item.start = start;
-        item.duration = duration; // TODO : 근처 아이템 시간 밀기
     }
     createUID() {
         return (++this.uidcount).toString();
