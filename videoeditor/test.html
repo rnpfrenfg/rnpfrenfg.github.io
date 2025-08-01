@@ -12,12 +12,13 @@
         <!-- Sidebar -->
         <div class="sidebar">
             <div class="sidebar-nav">
-                <button><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"></path><path d="M12 6v6l4 2"></path></svg></button>
                 <button class="active">image<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"></path></svg></button>
                 <input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" multiple>
                 <button>sound<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg></button>
                 <input type="file" id="audioInput" accept="audio/*">
-                <button><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></button>
+                <input type="file" id="mp4Input" accept="video/mp4" multiple>
+                <button id="saveToFileButton">Save to File</button>
+                <button id="loadFromFileButton">Load from File</button>
                 <button id="createvideo">createVideo<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button>
                 <a id="downloadLink" target="_blank">downloadLink<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="m19 9-5 5 5 5"></path></svg></a>
             </div>
@@ -50,74 +51,12 @@
                     <div class="controls">
                         <button id="previewstartbutton" class="cyclebutton"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg></button>
                         <button id="previewstopbutton" class="cyclebutton"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg></button>
-                        <div class="previewtime">00:00:05.10</div>
+                        <div class="previewtime"></div>
                     </div>
                 </div>
 
                 <!-- Properties Panel -->
                 <div id="properties-panel" class="properties-panel">
-                    <div class="section">
-                        <div>
-                            <label>Font Size</label>
-                            <input type="number" value="72" readonly>
-                        </div>
-                        <div>
-                            <label>Letter Spacing</label>
-                            <input type="number" value="0" readonly>
-                        </div>
-                        <div>
-                            <label>Font</label>
-                            <select disabled>
-                                <option value="pretendard" selected>pretendard</option>
-                                <option value="arial">Arial</option>
-                                <option value="helvetica">Helvetica</option>
-                                <option value="times">Times New Roman</option>
-                                <option value="roboto">Roboto</option>
-                                <option value="inter">Inter</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label>Formatting</label>
-                            <div class="formatting">
-                                <button class="format"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12"></path><path d="M6 12h12"></path><path d="M6 20h12"></path></svg></button>
-                                <button class="format"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 20l-7-7 7-7m-7 7H3"></path></svg></button>
-                            </div>
-                        </div>
-                        <div>
-                            <label>Text Alignment</label>
-                            <div class="alignment">
-                                <button class="format active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M3 12h18"></path><path d="M3 18h18"></path></svg></button>
-                                <button class="format"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6h4"></path><path d="M3 12h18"></path><path d="M10 18h4"></path></svg></button>
-                                <button class="format"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 6H3"></path><path d="M21 12H3"></path><path d="M21 18H3"></path></svg></button>
-                            </div>
-                        </div>
-                        <div>
-                            <button class="disable-background">Disable Background</button>
-                        </div>
-                        <div class="additional-controls">
-                            <div class="control-item">
-                                <span class="control-label">POSITION</span>
-                                <div class="control-indicators">
-                                    <div class="indicator"></div>
-                                    <div class="indicator inactive"></div>
-                                </div>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-label">OPACITY</span>
-                                <div class="control-indicators">
-                                    <div class="indicator"></div>
-                                    <div class="indicator inactive"></div>
-                                </div>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-label">SCALE</span>
-                                <div class="control-indicators">
-                                    <div class="indicator"></div>
-                                    <div class="indicator inactive"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             </div>
 

@@ -1,17 +1,15 @@
 import { VideoGenerator } from "./videoGenerator.js";
 import { Logger } from "./Logger.js";
-import { VideoProjectStorage, ContentType } from "./videotrack.js";
+import { VideoProjectStorage, VideoTrack, ContentType } from "./videotrack.js";
 var PropertyType;
 (function (PropertyType) {
     PropertyType[PropertyType["TrackItem"] = 0] = "TrackItem";
     PropertyType[PropertyType["sidebarItem"] = 1] = "sidebarItem";
     PropertyType[PropertyType["trackheader"] = 2] = "trackheader";
 })(PropertyType || (PropertyType = {}));
-const imageInput = document.getElementById('imageInput');
 const createVideoButton = document.getElementById('createvideo');
 const addTrackButton = document.getElementById('addtrackbutton');
 const downloadLink = document.getElementById('downloadLink');
-const audioInput = document.getElementById('audioInput');
 const timelineNow = document.querySelector('.timeline-header .time');
 const timelineStart = document.getElementById('header-starttime');
 const timelineEnd = document.getElementById('header-endtime');
@@ -29,8 +27,9 @@ let tlStart = 0;
 let tlEnd = 0;
 let tlNow = 0;
 drawStorage(storage);
-imageInput.addEventListener('change', handleImageInput);
-audioInput.addEventListener('change', handleAudioInput);
+document.getElementById('imageInput').addEventListener('change', handleImageInput);
+document.getElementById('audioInput').addEventListener('change', handleAudioInput);
+document.getElementById('mp4Input').addEventListener('change', handleMp4Input);
 addTrackButton.addEventListener('click', clickAddLineButton);
 createVideoButton.addEventListener('click', async () => {
     try {
@@ -83,6 +82,107 @@ timelineTrakcs.addEventListener('click', (e) => {
         updatePropertiesPanel(target);
     }
 });
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Delete' && selectedElement) {
+        e.preventDefault();
+        if (selectedElementType === PropertyType.TrackItem) {
+            const trackItem = storage.getTracks()
+                .flatMap(track => track.contents)
+                .find(item => item.id === selectedElement.id);
+            if (trackItem) {
+                const track = storage.getTracks().find(t => t.contents.includes(trackItem));
+                if (track) {
+                    track.contents = track.contents.filter(item => item.id !== trackItem.id);
+                    drawStorage(storage);
+                    clearProperty();
+                }
+            }
+        }
+        else if (selectedElementType === PropertyType.trackheader) {
+            storage.getTracks()
+                .filter(track => track.id === selectedElement.id)
+                .forEach(track => {
+                const index = storage.getTracks().indexOf(track);
+                if (index !== -1) {
+                    storage.getTracks().splice(index, 1);
+                    drawStorage(storage);
+                    clearProperty();
+                }
+            });
+        }
+        else if (selectedElementType === PropertyType.sidebarItem) {
+            const content = storage.getContent(selectedElement.id);
+            if (content) {
+                storage.getContents()
+                    .splice(storage.getContents().findIndex(c => c.id === content.id), 1);
+                drawStorage(storage);
+                clearProperty();
+            }
+        }
+    }
+});
+document.getElementById('saveToFileButton').addEventListener('click', await saveToFile);
+document.getElementById('loadFromFileButton').addEventListener('click', () => loadFromFile().catch(err => console.error('Load failed:', err)));
+async function saveToFile() {
+    const fileHandle = await window.showSaveFilePicker({
+        suggestedName: `project_${Date.now()}.json`,
+        types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
+    });
+    const writable = await fileHandle.createWritable();
+    const storageData = {
+        tracks: storage.getTracks().map(track => ({
+            id: track.id,
+            name: track.name,
+            type: track.type,
+            contents: track.contents.map(item => ({
+                id: item.id,
+                contentId: item.content.id,
+                start: item.start,
+                duration: item.duration
+            }))
+        })),
+        contents: storage.getContents().map(content => ({
+            id: content.id,
+            name: content.name,
+            type: content.type,
+            src: content.src instanceof Image ? content.src.src : content.src
+        }))
+    };
+    await writable.write(JSON.stringify(storageData, null, 2));
+    await writable.close();
+    console.log('Saved to file');
+}
+async function loadFromFile() {
+    const [fileHandle] = await window.showOpenFilePicker({
+        types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
+    });
+    const file = await fileHandle.getFile();
+    const text = await file.text();
+    const data = JSON.parse(text);
+    storage.getTracks().length = 0;
+    storage.getContents().length = 0;
+    data.tracks.forEach((trackData) => {
+        const track = new VideoTrack(trackData.id, trackData.type, trackData.name);
+        trackData.contents.forEach((item) => {
+            const content = data.contents.find((c) => c.id === item.contentId);
+            if (content) {
+                track.contents.push({
+                    id: item.id,
+                    content: { id: content.id, name: content.name, type: content.type, src: content.src },
+                    start: item.start,
+                    duration: item.duration
+                });
+            }
+        });
+        storage.getTracks().push(track);
+    });
+    data.contents.forEach((contentData) => {
+        const content = { id: contentData.id, name: contentData.name, type: contentData.type, src: contentData.src };
+        storage.getContents().push(content);
+    });
+    drawStorage(storage);
+    console.log('Loaded from file');
+}
 function drawStorage(storage) {
     sidebar.innerHTML = '';
     for (const content of storage.getContents()) {
@@ -130,6 +230,7 @@ function updatePropertiesPanel(element) {
                     <option value="image" ${contentType === ContentType.image ? 'selected' : ''}>Image</option>
                     <option value="audio" ${contentType === ContentType.audio ? 'selected' : ''}>Audio</option>
                     <option value="text" ${contentType === ContentType.text ? 'selected' : ''}>Text</option>
+                    <option value="mp4" ${contentType === ContentType.mp4 ? 'selected' : ''}>Text</option>
                 </select>
             </div>
         `;
@@ -190,6 +291,10 @@ function applyPropertyChange() {
         }
     }
 }
+function clearProperty() {
+    property.innerHTML = '';
+    selectedElement = null;
+}
 function drawContent(name, id, type) {
     const div = document.createElement('div');
     div.className = 'file';
@@ -198,20 +303,7 @@ function drawContent(name, id, type) {
     clicklayer.className = 'click-layer';
     const iconDiv = document.createElement('div');
     iconDiv.className = 'icon';
-    if (type === ContentType.image) {
-        iconDiv.innerHTML = `
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#facc15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path>
-                <path d="M14 3v5h5"></path>
-                <path d="M16 13H8"></path>
-                <path d="M16 17H8"></path>
-                <path d="M10 9H8"></path>
-            </svg>
-        `;
-    }
-    else if (type == ContentType.audio) {
-        iconDiv.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12l8-4-8-4z"></path></svg>';
-    }
+    iconDiv.innerHTML = contnetTypeToSvg(type);
     const fileNameDiv = document.createElement('span');
     fileNameDiv.className = 'file-name';
     fileNameDiv.textContent = name.length > 10 ? name.slice(0, 10) + '...' : name;
@@ -229,7 +321,7 @@ async function handleImageInput(event) {
             const img = new Image();
             img.src = URL.createObjectURL(file);
             await new Promise(resolve => img.onload = resolve);
-            storage.createContent(ContentType.image, img);
+            storage.createContent(ContentType.image, img, file.name);
             drawStorage(storage);
         }
         else {
@@ -241,21 +333,38 @@ async function handleAudioInput(event) {
     const files = event.target.files;
     if (!files?.length)
         return;
-    const file = files[0];
-    if (!files[0].type.startsWith('audio/')) {
-        Logger.log('오디오 파일이 아닙니다.');
+    for (let t = 0; t < files.length; t++) {
+        const file = files[t];
+        if (!file.type.startsWith('audio/')) {
+            Logger.log('오디오 파일이 아닙니다.');
+            return;
+        }
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const audioContext = new AudioContext();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            storage.createContent(ContentType.audio, audioBuffer, file.name);
+            Logger.log('오디오 파일이 업로드되었습니다.');
+        }
+        catch (e) {
+            Logger.log('오디오 로딩 실패:', e.message);
+        }
+    }
+    drawStorage(storage);
+}
+async function handleMp4Input(event) {
+    const files = event.target.files;
+    if (!files?.length)
         return;
-    }
-    try {
-        const arrayBuffer = await file.arrayBuffer();
-        const audioContext = new AudioContext();
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-        storage.createContent(ContentType.audio, audioBuffer);
+    for (const file of Array.from(files)) {
+        if (file.type !== 'video/mp4')
+            return;
+        const videoUrl = URL.createObjectURL(file);
+        const video = document.createElement('video');
+        video.src = videoUrl;
+        await new Promise(resolve => video.onloadedmetadata = resolve);
+        storage.createContent(ContentType.mp4, video, file.name);
         drawStorage(storage);
-        Logger.log('오디오 파일이 업로드되었습니다.');
-    }
-    catch (e) {
-        Logger.log('오디오 로딩 실패:', e.message);
     }
 }
 async function createVideo() {
@@ -285,6 +394,50 @@ function changeTimeline(start, end, now = tlNow) {
     tlNow = now;
     videoGenerator.drawImage(now);
 }
+function contnetTypeToSvg(type) {
+    switch (type) {
+        case ContentType.image:
+            return `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#facc15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="9" cy="9" r="2"></circle>
+                    <path d="M21 15l-3-3-4 4-2-2-3 3"></path>
+                </svg>
+            `;
+        case ContentType.audio:
+            return `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                </svg>
+            `;
+        case ContentType.text:
+            return `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a3e4db" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 6H3"></path>
+                    <path d="M21 12H3"></path>
+                    <path d="M15 18H3"></path>
+                    <path d="M21 6v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6"></path>
+                </svg>
+            `;
+        case ContentType.mp4:
+            return `
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f472b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="2" width="20" height="20" rx="2" ry="2"></rect>
+                        <polygon points="10 8 16 12 10 16 10 8"></polygon>
+                        <line x1="12" y1="2" x2="12" y2="6"></line>
+                        <line x1="6" y1="2" x2="18" y2="2"></line>
+                    </svg>
+            `;
+        default:
+            return `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f472b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                </svg>
+            `;
+    }
+}
 function createVideoTrackDiv(name, id) {
     const trackDiv = document.createElement('div');
     trackDiv.id = id.toString();
@@ -296,46 +449,9 @@ function createVideoTrackDiv(name, id) {
     indentDiv.className = 'indent';
     const iconDiv = document.createElement('div');
     const track = storage.getVideoTrack(id);
-    let svgContent = '';
     if (track) {
-        switch (track.type) {
-            case ContentType.image:
-                svgContent = `
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#facc15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                        <circle cx="9" cy="9" r="2"></circle>
-                        <path d="M21 15l-3-3-4 4-2-2-3 3"></path>
-                    </svg>
-                `;
-                break;
-            case ContentType.audio:
-                svgContent = `
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-                    </svg>
-                `;
-                break;
-            case ContentType.text:
-                svgContent = `
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a3e4db" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M17 6H3"></path>
-                        <path d="M21 12H3"></path>
-                        <path d="M15 18H3"></path>
-                        <path d="M21 6v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6"></path>
-                    </svg>
-                `;
-                break;
-            default:
-                svgContent = `
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f472b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-                    </svg>
-                `;
-        }
+        iconDiv.innerHTML = contnetTypeToSvg(track.type);
     }
-    iconDiv.innerHTML = svgContent;
     const span = document.createElement('span');
     span.textContent = name;
     labelDiv.appendChild(indentDiv);

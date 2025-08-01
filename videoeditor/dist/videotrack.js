@@ -3,6 +3,7 @@ export var ContentType;
     ContentType["image"] = "image";
     ContentType["audio"] = "audio";
     ContentType["text"] = "text";
+    ContentType["mp4"] = "mp4";
 })(ContentType || (ContentType = {}));
 export var ContentEffect;
 (function (ContentEffect) {
@@ -29,9 +30,10 @@ export class VideoProjectStorage {
         this.tracks = [];
         this.contents = [];
         this.fps = 60;
-        this.createTrack(ContentType.image, 'image');
         this.createTrack(ContentType.audio, 'sound');
         this.createTrack(ContentType.text, 'text');
+        this.createTrack(ContentType.mp4, 'mp4');
+        this.createTrack(ContentType.image, 'image');
     }
     createTrack(type, name) {
         let id = this.createUID();
@@ -39,11 +41,11 @@ export class VideoProjectStorage {
         this.tracks.push(track);
         return track;
     }
-    createContent(type, src) {
+    createContent(type, src, name) {
         const id = this.createUID();
         let content = {
             id: id,
-            name: 'name' + id.toString(),
+            name: name,
             type,
             src
         };
@@ -79,14 +81,22 @@ export class VideoProjectStorage {
     getContent(id) { for (const d of this.contents)
         if (d.id == id)
             return d; return null; }
-    editTrackItem(id, start, duration) {
+    getTrackOfItem(id) {
         for (const track of this.getTracks()) {
             for (const item of track.contents)
                 if (item.id === id) {
-                    item.start = start;
-                    item.duration = duration; // TODO : 근처 아이템 시간 밀기
+                    return [track, item];
                 }
         }
+        return null;
+    }
+    editTrackItem(id, start, duration) {
+        const res = this.getTrackOfItem(id);
+        if (res == null)
+            return;
+        const [track, item] = res;
+        item.start = start;
+        item.duration = duration; // TODO : 근처 아이템 시간 밀기
     }
     createUID() {
         return (++this.uidcount).toString();

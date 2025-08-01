@@ -2,7 +2,6 @@ import { Logger } from "./Logger.js";
 import { ContentType, ContentEffect } from "./videotrack.js";
 export class VideoGenerator {
     constructor(storage, canvas) {
-        this.glProgram = null;
         this.positionLocation = 0;
         this.texCoordLocation = 0;
         this.resolutionLocation = null;
@@ -67,7 +66,6 @@ export class VideoGenerator {
             return;
         }
         gl.useProgram(program);
-        this.glProgram = program;
         this.positionLocation = gl.getAttribLocation(program, 'a_position');
         this.texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
         this.resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
@@ -87,8 +85,10 @@ export class VideoGenerator {
         gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 16, 0);
         gl.enableVertexAttribArray(this.texCoordLocation);
         gl.vertexAttribPointer(this.texCoordLocation, 2, gl.FLOAT, false, 16, 8);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     }
-    processLine(gl, line, now) {
+    async processLine(gl, line, now) {
         const width = this.storage.getWidth();
         const height = this.storage.getHeight();
         this.resize(width, height);
@@ -117,13 +117,49 @@ export class VideoGenerator {
                 }
             }
         }
+        else if (line.type === ContentType.mp4) {
+            for (const con of line.contents) {
+                if (!(con.start <= now && now < con.start + con.duration)) {
+                    console.log(Date.now(), '시간,   ', !(con.start <= now && now < con.start + con.duration), 'dd', con.start, con.duration, now, con.start + con.duration, "NOW: ", now);
+                }
+                if (!(con.start <= now && now < con.start + con.duration))
+                    continue;
+                const video = con.content.src;
+                video.currentTime = (now - con.start);
+                video.muted = true;
+                const scale = Math.min(width / video.videoWidth, height / video.videoHeight);
+                const scaledWidth = video.videoWidth * scale;
+                const scaledHeight = video.videoHeight * scale;
+                const offsetX = (width - scaledWidth) / 2;
+                const offsetY = (height - scaledHeight) / 2;
+                const offscreen = new OffscreenCanvas(video.videoWidth, video.videoHeight);
+                const ctx = offscreen.getContext('2d');
+                video.currentTime = (now - con.start);
+                await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
+                ctx.drawImage(video, 0, 0);
+                const bitmap = offscreen.transferToImageBitmap();
+                const texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+                bitmap.close();
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                gl.uniform2f(this.positionUniformLocation, offsetX, offsetY);
+                gl.uniform2f(this.scaleLocation, scaledWidth, scaledHeight);
+                gl.uniform1i(this.imageLocation, 0);
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                gl.deleteTexture(texture);
+                video.pause();
+            }
+        }
     }
-    drawImage(now) {
+    async drawImage(now) {
         const gl = this.gl;
         gl.clearColor(1, 1, 1.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         for (const line of this.storage.getTracks()) {
-            this.processLine(gl, line, now);
+            await this.processLine(gl, line, now);
         }
     }
     resize(width, height) {
@@ -156,17 +192,48 @@ export class VideoGenerator {
             },
             fastStart: 'in-memory',
         };
-        let firstAudio = null;
-        for (const t of storage.getTracks())
-            if (t.type == ContentType.audio && t.contents.length != 0) {
-                firstAudio = t.contents[0].content.src;
-                break;
-            } //TODO dirty
-        if (firstAudio != null) {
+        let audioBuffers = [];
+        for (const track of storage.getTracks()) {
+            if (track.type === ContentType.audio) {
+                for (const content of track.contents) {
+                    audioBuffers.push({
+                        buffer: content.content.src,
+                        start: content.start,
+                        duration: content.duration,
+                    });
+                }
+            }
+            else if (track.type === ContentType.mp4) {
+                for (const content of track.contents) {
+                    const video = content.content.src;
+                    const response = await fetch(video.src);
+                    const arrayBuffer = await response.arrayBuffer();
+                    const audioContext = new AudioContext();
+                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                    audioBuffers.push({
+                        buffer: audioBuffer,
+                        start: content.start,
+                        duration: Math.min(content.duration, audioBuffer.duration),
+                    });
+                }
+            }
+        }
+        let audioSampleRate = 0;
+        let audioChannels = 0;
+        //TODO
+        //Grok : audio bitrate = (sampleRate * numberOfChannels * bitDepth) / compressionRatio
+        //             weightedBitrate = (Σ (bitrate_i * duration_i)) / totalDuration
+        //     video bitrate = (width * height * fps * bitDepth * complexityFactor) / compressionRatio
+        let audioBitrate = 128000;
+        for (const audio of audioBuffers) {
+            audioSampleRate = Math.max(audioSampleRate, audio.buffer.sampleRate);
+            audioChannels = Math.max(audioChannels, audio.buffer.numberOfChannels);
+        }
+        if (audioBuffers.length != 0) {
             muxerOptions.audio = {
                 codec: 'aac',
-                numberOfChannels: firstAudio.numberOfChannels,
-                sampleRate: firstAudio.sampleRate,
+                numberOfChannels: audioChannels,
+                sampleRate: audioSampleRate,
             };
         }
         const muxer = new Mp4Muxer.Muxer(muxerOptions);
@@ -191,9 +258,10 @@ export class VideoGenerator {
             return null;
         }
         videoEncoder.configure(encoderConfig);
+        Logger.log('이미지 처리 시작');
         //draw
         for (let timestamp = 0; timestamp < totalVideoDuration * 1000000; timestamp += 1000000 / fps) {
-            this.drawImage(timestamp / 1000000);
+            await this.drawImage(timestamp / 1000000);
             const frame = new VideoFrame(this.canvas, {
                 timestamp: timestamp,
                 duration: fps,
@@ -201,13 +269,14 @@ export class VideoGenerator {
             videoEncoder.encode(frame, { keyFrame: true });
             frame.close();
         }
-        // 마지막 프레임
+        //draw :: final frame // for some video player
         const frame = new VideoFrame(this.canvas, { timestamp: totalVideoDuration * 1000000, duration: 0 });
         videoEncoder.encode(frame, { keyFrame: true });
         frame.close();
         await videoEncoder.flush();
+        Logger.log('사운드 처리 시작');
         //audio
-        if (firstAudio != null) {
+        if (audioBuffers.length > 0) {
             const audioEncoder = new AudioEncoder({
                 output: (chunk, meta) => {
                     muxer.addAudioChunk(chunk, meta);
@@ -218,9 +287,9 @@ export class VideoGenerator {
             });
             const audioConfig = {
                 codec: 'mp4a.40.2',
-                numberOfChannels: firstAudio.numberOfChannels,
-                sampleRate: firstAudio.sampleRate,
-                bitrate: 128000,
+                numberOfChannels: audioChannels,
+                sampleRate: audioSampleRate,
+                bitrate: audioBitrate,
             };
             const audioSupport = await AudioEncoder.isConfigSupported(audioConfig);
             if (!audioSupport.supported) {
@@ -228,35 +297,27 @@ export class VideoGenerator {
                 return null;
             }
             audioEncoder.configure(audioConfig);
-            for (const track of tracks) {
-                if (track.type != ContentType.audio)
-                    continue;
-                for (const item of track.contents) {
-                    const audioBuffer = item.content.src;
-                    const start = item.start;
-                    const sampleRate = audioBuffer.sampleRate;
-                    const numberOfChannels = audioBuffer.numberOfChannels;
-                    const audioDuration = Math.min(item.duration, audioBuffer.duration);
-                    const startTime = start * 1000000;
-                    const numberOfFrames = Math.floor((audioDuration * sampleRate));
-                    const channelData = new Float32Array(numberOfFrames * numberOfChannels);
-                    for (let i = 0; i < numberOfChannels; i++) {
-                        const channel = audioBuffer.getChannelData(i);
-                        for (let j = 0; j < numberOfFrames; j++) {
-                            channelData[j * numberOfChannels + i] = j < channel.length ? channel[j] : 0;
-                        }
+            for (const { buffer, start, duration } of audioBuffers) {
+                const sampleRate = buffer.sampleRate;
+                const numberOfChannels = buffer.numberOfChannels;
+                const numberOfFrames = Math.floor(duration * sampleRate);
+                const channelData = new Float32Array(numberOfFrames * numberOfChannels);
+                for (let i = 0; i < numberOfChannels; i++) {
+                    const channel = buffer.getChannelData(i);
+                    for (let j = 0; j < numberOfFrames; j++) {
+                        channelData[j * numberOfChannels + i] = j < channel.length ? channel[j] : 0;
                     }
-                    const audioData = new AudioData({
-                        format: 'f32',
-                        sampleRate,
-                        numberOfFrames,
-                        numberOfChannels,
-                        timestamp: startTime,
-                        data: channelData,
-                    });
-                    audioEncoder.encode(audioData);
-                    audioData.close();
                 }
+                const audioData = new AudioData({
+                    format: 'f32',
+                    sampleRate,
+                    numberOfFrames,
+                    numberOfChannels,
+                    timestamp: start * 1000000,
+                    data: channelData,
+                });
+                audioEncoder.encode(audioData);
+                audioData.close();
             }
             await audioEncoder.flush();
         }

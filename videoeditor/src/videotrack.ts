@@ -1,7 +1,8 @@
 export enum ContentType {
     image = 'image',
     audio = 'audio',
-    text='text'
+    text='text',
+    mp4 = 'mp4'
 }
 export enum ContentEffect {
     DEFAULT = 'default',
@@ -56,9 +57,10 @@ export class VideoProjectStorage{
         this.contents=[];
         this.fps = 60;
 
-        this.createTrack(ContentType.image, 'image');
         this.createTrack(ContentType.audio, 'sound');
         this.createTrack(ContentType.text, 'text');
+        this.createTrack(ContentType.mp4, 'mp4');
+        this.createTrack(ContentType.image, 'image');
     }
 
     public createTrack(type: ContentType, name: string): VideoTrack{
@@ -68,11 +70,11 @@ export class VideoProjectStorage{
         return track;
     }
 
-    public createContent(type:ContentType, src: any):Content{
+    public createContent(type:ContentType, src: any, name: string):Content{
         const id = this.createUID();
         let content:Content = {
             id:id,
-            name:'name'+id.toString(),
+            name: name,
             type,
             src
         };
@@ -105,14 +107,22 @@ export class VideoProjectStorage{
     }
     public getContent(id:string):Content|null{for(const d of this.contents)if(d.id==id)return d;return null;}
 
-    public editTrackItem(id: string, start:number, duration:number){
+    public getTrackOfItem(id: string) : [VideoTrack, VideoTrackItem] | null{
         for(const track of this.getTracks()){
             for(const item of track.contents)
                 if(item.id === id){
-                    item.start = start;
-                    item.duration = duration; // TODO : 근처 아이템 시간 밀기
+                    return [track, item];
                 }
         }
+        return null;
+    }
+
+    public editTrackItem(id: string, start:number, duration:number){
+        const res = this.getTrackOfItem(id);
+        if(res== null)return;
+        const [track, item] = res;
+        item.start = start;
+        item.duration = duration; // TODO : 근처 아이템 시간 밀기
     }
 
     private createUID(): string{
