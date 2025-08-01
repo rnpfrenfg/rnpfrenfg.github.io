@@ -36,12 +36,7 @@ export class VideoTrack{
     }
 
     getEndtime():number{
-        let du = 0;
-        for(const con of this.contents){
-            let end = con.start + con.duration;
-            if(end > du) du=end; 
-        }
-        return du;
+        return this.contents.reduce((max, item) => Math.max(max, item.start + item.duration), 0);
     }
 }
 
@@ -61,12 +56,14 @@ export class VideoProjectStorage{
         this.contents=[];
         this.fps = 60;
 
-        this.createTrack(ContentType.image);
+        this.createTrack(ContentType.image, 'image');
+        this.createTrack(ContentType.audio, 'sound');
+        this.createTrack(ContentType.text, 'text');
     }
 
-    public createTrack(type: ContentType): VideoTrack{
+    public createTrack(type: ContentType, name: string): VideoTrack{
         let id = this.createUID();
-        let track:VideoTrack = new VideoTrack(id,type,'images');
+        let track:VideoTrack = new VideoTrack(id,type,name);
         this.tracks.push(track);
         return track;
     }
@@ -83,13 +80,8 @@ export class VideoProjectStorage{
         return content;
     }
 
-    public getVideoEndTime():number{
-        let totalVideoDuration = 0;
-        for(const line of this.tracks){
-            let du = line.getEndtime();
-            if(du > totalVideoDuration) totalVideoDuration=du;
-        }
-        return totalVideoDuration;
+    public getVideoEndTime(): number {
+        return this.tracks.reduce((max, track) => Math.max(max, track.getEndtime()), 0);
     }
 
     public addContentToTrackacc(trackID:string, con: Content, start:number, duration:number){
@@ -113,9 +105,18 @@ export class VideoProjectStorage{
     }
     public getContent(id:string):Content|null{for(const d of this.contents)if(d.id==id)return d;return null;}
 
-    public createUID(): string{
-        this.uidcount++;
-        return this.uidcount.toString();
+    public editTrackItem(id: string, start:number, duration:number){
+        for(const track of this.getTracks()){
+            for(const item of track.contents)
+                if(item.id === id){
+                    item.start = start;
+                    item.duration = duration; // TODO : 근처 아이템 시간 밀기
+                }
+        }
+    }
+
+    private createUID(): string{
+        return (++this.uidcount).toString();
     }
     
     public getFPS():number{return this.fps;}public setFPS(fps:number){this.fps=fps;}

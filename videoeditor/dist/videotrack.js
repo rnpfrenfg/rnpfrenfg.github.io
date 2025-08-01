@@ -17,13 +17,7 @@ export class VideoTrack {
         this.contents = [];
     }
     getEndtime() {
-        let du = 0;
-        for (const con of this.contents) {
-            let end = con.start + con.duration;
-            if (end > du)
-                du = end;
-        }
-        return du;
+        return this.contents.reduce((max, item) => Math.max(max, item.start + item.duration), 0);
     }
 }
 export class VideoProjectStorage {
@@ -35,11 +29,13 @@ export class VideoProjectStorage {
         this.tracks = [];
         this.contents = [];
         this.fps = 60;
-        this.createTrack(ContentType.image);
+        this.createTrack(ContentType.image, 'image');
+        this.createTrack(ContentType.audio, 'sound');
+        this.createTrack(ContentType.text, 'text');
     }
-    createTrack(type) {
+    createTrack(type, name) {
         let id = this.createUID();
-        let track = new VideoTrack(id, type, 'images');
+        let track = new VideoTrack(id, type, name);
         this.tracks.push(track);
         return track;
     }
@@ -55,13 +51,7 @@ export class VideoProjectStorage {
         return content;
     }
     getVideoEndTime() {
-        let totalVideoDuration = 0;
-        for (const line of this.tracks) {
-            let du = line.getEndtime();
-            if (du > totalVideoDuration)
-                totalVideoDuration = du;
-        }
-        return totalVideoDuration;
+        return this.tracks.reduce((max, track) => Math.max(max, track.getEndtime()), 0);
     }
     addContentToTrackacc(trackID, con, start, duration) {
         const track = this.getVideoTrack(trackID);
@@ -89,9 +79,17 @@ export class VideoProjectStorage {
     getContent(id) { for (const d of this.contents)
         if (d.id == id)
             return d; return null; }
+    editTrackItem(id, start, duration) {
+        for (const track of this.getTracks()) {
+            for (const item of track.contents)
+                if (item.id === id) {
+                    item.start = start;
+                    item.duration = duration; // TODO : 근처 아이템 시간 밀기
+                }
+        }
+    }
     createUID() {
-        this.uidcount++;
-        return this.uidcount.toString();
+        return (++this.uidcount).toString();
     }
     getFPS() { return this.fps; }
     setFPS(fps) { this.fps = fps; }

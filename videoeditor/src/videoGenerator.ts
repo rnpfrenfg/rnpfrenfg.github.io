@@ -18,7 +18,6 @@ export class VideoGenerator {
     constructor(storage: VideoProjectStorage, canvas: HTMLCanvasElement) {
         this.storage=storage;
         this.canvas = canvas;
-        this.resize(storage.getWidth(), storage.getHeight());
 
         const gl = this.canvas.getContext('webgl');
         if (!gl) {
@@ -27,6 +26,7 @@ export class VideoGenerator {
         }
         this.gl = gl;
         this.setupWebGL();
+        this.resize(storage.getWidth(), storage.getHeight());
     }
 
     private setupWebGL() {
@@ -106,13 +106,12 @@ export class VideoGenerator {
     }
 
     private processLine(gl: WebGLRenderingContext, line: VideoTrack, now: number): void{
-
-        const contents = line.contents;
         const width = this.storage.getWidth();
         const height = this.storage.getHeight();
+        this.resize(width, height);
 
         if (line.type === ContentType.image) {
-            for(const con of contents){
+            for(const con of line.contents){
                 if(!(con.start <= now && now < con.start + con.duration))
                     continue;
 
@@ -144,7 +143,6 @@ export class VideoGenerator {
 
     public drawImage(now:number){
         const gl = this.gl;
-        gl.uniform2f(this.resolutionLocation, this.storage.getWidth(), this.storage.getHeight());
         gl.clearColor(1, 1, 1.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         for(const line of this.storage.getTracks()){
@@ -153,9 +151,11 @@ export class VideoGenerator {
     }
 
     public resize(width: number, height: number): void{
-        this.storage.resize(width,height);
         this.canvas.width = width;
         this.canvas.height = height;
+        const gl = this.gl;
+        gl.viewport(0, 0, this.storage.getWidth(), this.storage.getHeight());
+        gl.uniform2f(this.resolutionLocation, this.storage.getWidth(), this.storage.getHeight());
     }
 
     public async createVideo(): Promise<Blob | null> {
@@ -166,6 +166,7 @@ export class VideoGenerator {
         const fps = storage.getFPS();
         const totalVideoDuration = storage.getVideoEndTime();
 
+        this.resize(width, height);
         if (tracks.length === 0) {
             Logger.log('컨텐츠를 먼저 업로드하세요.');
             return null;
@@ -267,13 +268,12 @@ export class VideoGenerator {
                 for(const item of track.contents){
                     const audioBuffer = item.content.src as AudioBuffer;
                     const start = item.start;
-                    const duration = item.duration;
                     
                     const sampleRate = audioBuffer.sampleRate;
                     const numberOfChannels = audioBuffer.numberOfChannels;
-                    const audioDuration = Math.min(duration, audioBuffer.duration, (totalVideoDuration - start * 1_000_000) / 1_000_000) * 1_000_000;
+                    const audioDuration = Math.min(item.duration, audioBuffer.duration);
                     const startTime = start * 1_000_000;
-                    const numberOfFrames = Math.floor((audioDuration * sampleRate) / 1_000_000);
+                    const numberOfFrames = Math.floor((audioDuration * sampleRate));
                     const channelData = new Float32Array(numberOfFrames * numberOfChannels);
                     for (let i = 0; i < numberOfChannels; i++) {
                         const channel = audioBuffer.getChannelData(i);

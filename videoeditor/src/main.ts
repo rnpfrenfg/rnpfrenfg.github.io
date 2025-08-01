@@ -1,6 +1,12 @@
 import {VideoGenerator} from "./videoGenerator.js";
 import { Logger } from "./Logger.js";
 import {VideoProjectStorage,VideoTrackItem,VideoTrack,ContentType,Content,ContentEffect } from "./videotrack.js";
+import { create } from "domain";
+import { start } from "repl";
+
+enum PropertyType{
+    TrackItem,sidebarItem,trackheader
+}
 
 const imageInput: HTMLInputElement = document.getElementById('imageInput') as HTMLInputElement;
 const createVideoButton: HTMLButtonElement = document.getElementById('createvideo') as HTMLButtonElement;
@@ -15,9 +21,12 @@ const sidebar: HTMLDivElement = document.getElementById('sidebargrid') as HTMLDi
 const canvas: HTMLCanvasElement = document.getElementById('canvas') as HTMLCanvasElement;
 const playhead: HTMLDivElement = document.getElementById('playhead') as HTMLDivElement;
 const timelineruler: HTMLDivElement = document.getElementById('timelineruler') as HTMLDivElement;
+const property: HTMLDivElement = document.getElementById('properties-panel') as HTMLDivElement;
 
 const storage: VideoProjectStorage = new VideoProjectStorage();
 const videoGenerator: VideoGenerator = new VideoGenerator(storage,canvas);
+let selectedElement: HTMLElement | null = null;// for property
+let selectedElementType: PropertyType = PropertyType.TrackItem;
 
 let tlStart = 0;
 let tlEnd = 0;
@@ -25,12 +34,12 @@ let tlNow = 0;
 
 drawStorage(storage);
 
-imageInput.addEventListener('change', handleImageInput.bind(this));
+imageInput.addEventListener('change', handleImageInput);
 audioInput.addEventListener('change', handleAudioInput);
-addTrackButton.addEventListener('click',clickAddLineButton.bind(this));
+addTrackButton.addEventListener('click',clickAddLineButton);
 createVideoButton.addEventListener('click', async () => {
     try {
-        await createVideo.call(this);
+        createVideo();
     } catch (error) {
         console.error('Video creation failed:', error);
     }
@@ -54,6 +63,31 @@ timelineruler.addEventListener('mouseleave', () => {
     isRulerDragging = false;
 });
 
+sidebar.addEventListener('click', (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if(target.parentElement == null)return;
+    if (target.classList.contains('click-layer')) {
+        selectedElement = target.parentElement;
+        selectedElementType = PropertyType.sidebarItem;
+        updatePropertiesPanel(target.parentElement);
+    }
+});
+timelineTrakcs.addEventListener('click', (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    console.log(target);
+    if (target.classList.contains('timeline-trackheader')) {
+        if(target == null) return;
+        selectedElement = target;
+        selectedElementType = PropertyType.trackheader;
+        updatePropertiesPanel(target);
+    }
+    else if (target.classList.contains('track-bar')) {
+        selectedElement = target;
+        selectedElementType = PropertyType.TrackItem;
+        updatePropertiesPanel(target);
+    }
+});
+
 function drawStorage(storage: VideoProjectStorage){
     sidebar.innerHTML='';
     for(const content of storage.getContents()){
@@ -62,27 +96,108 @@ function drawStorage(storage: VideoProjectStorage){
 
     changeTimeline(0,storage.getVideoEndTime() + 5);
     timelineTrakcs.innerHTML = '';
-    for(const track of storage.getTracks()){
+    storage.getTracks().forEach(track => {
         const trackDiv = createVideoTrackDiv(track.name,track.id);
         timelineTrakcs.appendChild(trackDiv);
-        for(const content of track.contents){
-            renderVideoTrackItem(content,trackDiv);
-        }
-        setupDragAndDrop(sidebar, trackDiv);
+        track.contents.forEach(content => renderVideoTrackItem(content, trackDiv));
+        setupDragAndDrop(trackDiv);
+    });
+}
+
+function updatePropertiesPanel(element: HTMLElement) {
+
+    if (selectedElementType === PropertyType.TrackItem) {
+        const trackItem = storage.getTracks()
+            .flatMap(track => track.contents)
+            .find(item => item.id === element.id);
+        const duration = trackItem ? trackItem.duration : 2;
+        const startTime = trackItem ? trackItem.start : 0;
+        property.innerHTML = `
+            <div>
+                <label>Duration (s):</label>
+                <input type="number" step="0.1" value="${duration}" data-prop="duration">
+            </div>
+            <div>
+                <label>Start Time (s):</label>
+                <input type="number" step="0.1" value="${startTime}" data-prop="startTime">
+            </div>
+        `;
+    } else if (selectedElementType === PropertyType.trackheader) {
+        const track = storage.getVideoTrack(element.id);
+        const name = track ? track.name : 'Track';
+        const contentType = track ? track.type : ContentType.image;
+        property.innerHTML = `
+            <div>
+                <label>Name:</label>
+                <input type="text" value="${name}" data-prop="name">
+            </div>
+            <div>
+                <label>Content Type:</label>
+                <select data-prop="contentType">
+                    <option value="image" ${contentType === ContentType.image ? 'selected' : ''}>Image</option>
+                    <option value="audio" ${contentType === ContentType.audio ? 'selected' : ''}>Audio</option>
+                    <option value="text" ${contentType === ContentType.text ? 'selected' : ''}>Text</option>
+                </select>
+            </div>
+        `;
+    } else if (selectedElementType === PropertyType.sidebarItem) {
+        const content = storage.getContent(element.id);
+        const name = content ? content.name : 'File';
+        property.innerHTML = `
+            <div>
+                <label>Name:</label>
+                <input type="text" value="${name}" data-prop="name">
+            </div>
+        `;
     }
 
+    const applyButton = document.createElement('button');
+    applyButton.textContent = 'Apply';
+    applyButton.addEventListener('click', applyPropertyChange);
+    property.appendChild(applyButton);
 }
 
-function handleClickTrack(){
-    
-}
+function applyPropertyChange() {//todo : if storage size big >>> 
+    if (!selectedElement) return;
 
-function handleClickTrackItem(){
+    const properties: { [key: string]: string } = {};
+    const inputs = property.querySelectorAll('input[data-prop], select[data-prop]');
+    const id = selectedElement.id;
 
-}
+    inputs.forEach((t) => {
+        const input = t as HTMLInputElement;
+        const propName = input.dataset.prop;
+        if (propName) {
+            properties[propName] = input.value;
+        }
+    });
 
-function handleClickSidebarItem(){
+    if (selectedElementType === PropertyType.TrackItem) {
+        const duration = properties['duration'];
+        const startTime = properties['startTime'];
 
+        storage.editTrackItem(id,parseFloat(startTime),parseFloat(duration));
+        drawStorage(storage);
+    } else if (selectedElementType === PropertyType.trackheader) {
+        const name = properties['name'];
+        const contentType = properties['contentType'] as ContentType;
+
+        const track = storage.getVideoTrack(selectedElement.id);
+        if(track == null) return;
+        if (track && track.type !== contentType) {
+            track.contents=[];
+            track.type = contentType;
+        }
+        track.name = name;
+        drawStorage(storage);
+    } else if (selectedElementType === PropertyType.sidebarItem) {
+        const name = properties['name'];
+        const content = storage.getContent(selectedElement.id);
+        if (content) {
+            content.name = name;
+            drawStorage(storage);
+        }
+    }
 }
 
 function drawContent(name: string, id:string, type:ContentType){
@@ -90,6 +205,8 @@ function drawContent(name: string, id:string, type:ContentType){
     div.className = 'file';
     div.id = id.toString();
 
+    const clicklayer = document.createElement('div');
+    clicklayer.className = 'click-layer';
     const iconDiv = document.createElement('div');
     iconDiv.className = 'icon';
 
@@ -108,10 +225,11 @@ function drawContent(name: string, id:string, type:ContentType){
         iconDiv.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12l8-4-8-4z"></path></svg>'
     }
 
-    const fileNameDiv = document.createElement('div');
+    const fileNameDiv = document.createElement('span');
     fileNameDiv.className = 'file-name';
     fileNameDiv.textContent = name.length > 10 ? name.slice(0, 10) + '...' : name;
 
+    div.appendChild(clicklayer);
     div.appendChild(iconDiv);
     div.appendChild(fileNameDiv);
     sidebar.appendChild(div);
@@ -119,7 +237,7 @@ function drawContent(name: string, id:string, type:ContentType){
 
 async function handleImageInput(event: Event): Promise<void> {
     const files = (event.target as HTMLInputElement).files;
-    if (!files) return;
+    if (!files?.length) return;
 
     for(const file of Array.from(files || [])){
         if (file.type.startsWith('image/')) {
@@ -135,13 +253,9 @@ async function handleImageInput(event: Event): Promise<void> {
     }
 }
 
-async function handleControlRuler(){
-
-}
-
 async function handleAudioInput(event: Event): Promise<void> {
     const files = (event.target as HTMLInputElement).files;
-    if(files===null)return;
+    if(!files?.length)return;
 
     const file = files[0];
     if (!files[0].type.startsWith('audio/')) {
@@ -163,15 +277,12 @@ async function handleAudioInput(event: Event): Promise<void> {
 
 async function createVideo(){
     createVideoButton.disabled = true;
-    let blob: Blob|any = await videoGenerator.createVideo();
+    const blob = await videoGenerator.createVideo();
     if(blob == null){
         Logger.log('영상 생성 실패');
         return;
     }
-    if(!createVideoButton.disabled){
-        URL.revokeObjectURL(downloadLink.href);
-    }
-
+    URL.revokeObjectURL(downloadLink.href);
     const videoUrl = URL.createObjectURL(blob);
     downloadLink.href = videoUrl;
     downloadLink.style.display = 'inline-block';
@@ -179,7 +290,7 @@ async function createVideo(){
 }
 
 function clickAddLineButton(){
-    storage.createTrack(ContentType.image);
+    storage.createTrack(ContentType.image, 'image');
     drawStorage(storage);
 }
 
@@ -203,14 +314,52 @@ function createVideoTrackDiv(name: string, id: string): HTMLDivElement {
 
     const labelDiv = document.createElement('div');
     labelDiv.className = 'timeline-trackheader';
+    labelDiv.id=id;
     const indentDiv = document.createElement('div');
     indentDiv.className = 'indent';
     const iconDiv = document.createElement('div');
-    iconDiv.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f472b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-        </svg>
-    `;
+
+    const track = storage.getVideoTrack(id);
+    let svgContent = '';
+    if (track) {
+        switch (track.type) {
+            case ContentType.image:
+                svgContent = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#facc15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                        <circle cx="9" cy="9" r="2"></circle>
+                        <path d="M21 15l-3-3-4 4-2-2-3 3"></path>
+                    </svg>
+                `;
+                break;
+            case ContentType.audio:
+                svgContent = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                    </svg>
+                `;
+                break;
+            case ContentType.text:
+                svgContent = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a3e4db" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M17 6H3"></path>
+                        <path d="M21 12H3"></path>
+                        <path d="M15 18H3"></path>
+                        <path d="M21 6v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6"></path>
+                    </svg>
+                `;
+                break;
+            default:
+                svgContent = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f472b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                    </svg>
+                `;
+        }
+    }
+    iconDiv.innerHTML = svgContent;
     const span = document.createElement('span');
     span.textContent = name;
 
@@ -220,36 +369,27 @@ function createVideoTrackDiv(name: string, id: string): HTMLDivElement {
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'content';
-    const trackBarDiv = document.createElement('div');
-    trackBarDiv.className = 'track-bar';
-
+    
     const innerDiv = document.createElement('div');
     const trackSpan = document.createElement('span');
     innerDiv.appendChild(trackSpan);
-    trackBarDiv.appendChild(innerDiv);
-    contentDiv.appendChild(trackBarDiv);
     trackDiv.appendChild(labelDiv);
     trackDiv.appendChild(contentDiv);
     return trackDiv;
 }
 
-function setupDragAndDrop(sidebar: HTMLDivElement, timeline: HTMLDivElement) {
-    const sidebarItems: HTMLElement[] = Array.from(sidebar.getElementsByClassName('file')) as HTMLElement[];
-    let draggedItem: HTMLElement | null = null;
-
-    sidebarItems.forEach(item => {
-        item.draggable = true;
-
-        item.addEventListener('dragstart', (e: DragEvent) => {
-            draggedItem = item;
-            e.dataTransfer?.setData('text/plain', item.querySelector('.file-name')?.textContent || '');
-        });
-
-        item.addEventListener('dragend', () => {
-            draggedItem = null;
-        });
-    });
-
+let draggedItem: HTMLElement | null = null;
+sidebar.addEventListener('dragstart', (e: DragEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.classList.contains('click-layer')) {
+        draggedItem = target.parentElement;
+        e.dataTransfer?.setData('text/plain', target.id);
+    }
+});
+sidebar.addEventListener('dragend', () => {
+    draggedItem = null;
+});
+function setupDragAndDrop(timeline: HTMLDivElement) {
     timeline.addEventListener('dragover', (e: DragEvent) => {
         e.preventDefault();
     });
@@ -257,34 +397,26 @@ function setupDragAndDrop(sidebar: HTMLDivElement, timeline: HTMLDivElement) {
     timeline.addEventListener('drop', (e: DragEvent) => {
         e.preventDefault();
         if (draggedItem) {
-            const line = timeline;
-            handleDrop([draggedItem], line);
+            const trackID = timeline.id;
+            const content = storage.getContent(draggedItem.id);
+            if (content) {
+                storage.addContentToTrack(trackID,content, 2);
+                drawStorage(storage);
+            }
+            draggedItem = null;
         }
     });
 }
 
-function handleDrop(sidebarItems: HTMLElement[], trackDiv: HTMLElement) {
-    const trackID=trackDiv.id;
-    const track = storage.getVideoTrack(trackID);
-    if(track===null)return;
-    for(const itemDiv of sidebarItems){
-        const item = storage.getContent(itemDiv.id);
-        if(item == null) continue;
-        storage.addContentToTrack(trackID,item, 2);
-    }
-    drawStorage(storage);
-}
-
 function renderVideoTrackItem(content: VideoTrackItem, track: HTMLDivElement) {
-    console.log(`start:${content.start}, duration:${content.duration}, trackID:${track.id}`);
-
     const contentDiv = document.createElement('div');
     contentDiv.className = 'track-bar';
     let startPos = videoTimeToClient(content.start);
     contentDiv.style.left = `${startPos}px`;
     contentDiv.style.width = `${videoTimeToClient(content.duration + content.start) - startPos}px`;
     contentDiv.style.backgroundColor = '#34d399';
-    contentDiv.innerHTML = `<span>${content.duration}s</span>`;
+    contentDiv.innerHTML = `<span>${content.content.name}</span>`;
+    contentDiv.id=content.id;
 
     const contentArea = track.querySelector('.content') as HTMLDivElement;
     if (contentArea) {
@@ -303,6 +435,5 @@ function controlTimeline(e: MouseEvent){
 function videoTimeToClient(now: number){
     const rect = timelineruler.getBoundingClientRect();
     const ret = ((now-tlStart)/(tlEnd-tlStart))*(rect.right-rect.left);
-    console.log(now,ret);
     return ret;
 }
