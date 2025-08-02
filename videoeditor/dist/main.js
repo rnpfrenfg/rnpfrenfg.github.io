@@ -73,7 +73,6 @@ sidebar.addEventListener('click', (e) => {
 });
 timelineTrakcs.addEventListener('click', (e) => {
     const target = e.target;
-    console.log(target);
     if (target.classList.contains('timeline-trackheader')) {
         if (target == null)
             return;
@@ -91,7 +90,6 @@ canvas.addEventListener('click', (e) => {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    console.log(x, y, e, rect);
     const hitItem = findItemAtPosition(x, y, tlNow);
     if (hitItem) {
         selectedTrackItem = hitItem;

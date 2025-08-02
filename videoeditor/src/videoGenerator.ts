@@ -110,25 +110,26 @@ export class VideoGenerator {
     private storage: VideoProjectStorage;
 
     private canvas: HTMLCanvasElement;
+    private doubleBuffering: OffscreenCanvas;
     private offscreenCanvas: OffscreenCanvas;
     private glContext: CGlContext;
     private offscreenGlContext: CGlContext;
+    private dbGlContext: CGlContext;
 
     constructor(storage: VideoProjectStorage, canvas: HTMLCanvasElement) {
         this.storage=storage;
         this.canvas = canvas;
         this.offscreenCanvas = new OffscreenCanvas(storage.getWidth(), storage.getHeight());
+        this.doubleBuffering = new OffscreenCanvas(storage.getWidth(), storage.getHeight());
 
         this.glContext = new CGlContext(this.canvas);
         this.offscreenGlContext = new CGlContext(this.offscreenCanvas);
+        this.dbGlContext = new CGlContext(this.doubleBuffering);
         this.resize(storage.getWidth(), storage.getHeight());
     }
 
     private async processLine(glContext: CGlContext, line: VideoTrack, now: number) {
         const gl = glContext.gl;
-        const width = this.storage.getWidth();
-        const height = this.storage.getHeight();
-
         if (line.type === ContentType.image) {
             for (const con of line.contents) {
                 if (!(con.start <= now && now < con.start + con.duration))
@@ -178,12 +179,46 @@ export class VideoGenerator {
     }
 
     public async drawImage(now:number){
-        this._drawImage(this.glContext,now);
+        await this._drawImage(this.dbGlContext,now);
+        const dbGl = this.dbGlContext.gl;
+        const width = this.storage.getWidth();
+        const height = this.storage.getHeight();
+        const pixels = new Uint8Array(width * height * 4);
+        dbGl.readPixels(0, 0, width, height, dbGl.RGBA, dbGl.UNSIGNED_BYTE, pixels);
+
+        const gl = this.glContext.gl;
+        const texture = gl.createTexture();
+        gl.clearColor(1, 1, 1, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        const texCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+            0.0, 1.0,
+            1.0, 1.0,
+            0.0, 0.0,
+            1.0, 0.0
+        ]), gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(this.glContext.texCoordLocation);
+        gl.vertexAttribPointer(this.glContext.texCoordLocation, 2, gl.FLOAT, false, 0, 0);
+
+        gl.uniform2f(this.glContext.positionUniformLocation, 0, 0);
+        gl.uniform2f(this.glContext.scaleLocation, width, height);
+        gl.uniform1i(this.glContext.imageLocation, 0);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        gl.deleteTexture(texture);
+        gl.deleteBuffer(texCoordBuffer);
     }
 
     private async _drawImage(glContext:CGlContext,now:number){
-        const gl = this.glContext.gl;
-        gl.clearColor(1, 1, 1.0, 1.0);
+        const gl = glContext.gl;
+        gl.clearColor(1, 1, 1, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
         for(const line of this.storage.getTracks()){
             await this.processLine(glContext, line, now);
@@ -195,8 +230,12 @@ export class VideoGenerator {
         this.canvas.height = height;
         this.offscreenCanvas.width = width;
         this.offscreenCanvas.height = height;
+        this.doubleBuffering.width=width;
+        this.doubleBuffering.height=height;
+
         this.glContext.setViewport(this.storage.getWidth(), this.storage.getHeight());
         this.offscreenGlContext.setViewport(this.storage.getWidth(), this.storage.getHeight());
+        this.dbGlContext.setViewport(this.storage.getWidth(), this.storage.getHeight());
     }
 
     public async createVideo(): Promise<Blob | null> {
@@ -311,6 +350,8 @@ export class VideoGenerator {
         videoEncoder.configure(encoderConfig);
 
         Logger.log('이미지 처리 시작');
+        let lastLogTime = Date.now();
+        const totalMicroseconds = totalVideoDuration * 1_000_000;
         //draw
         for(let timestamp=0; timestamp < totalVideoDuration*1_000_000; timestamp+=1_000_000/fps){
             await this._drawImage(this.offscreenGlContext, timestamp/1_000_000);
@@ -320,6 +361,13 @@ export class VideoGenerator {
             });
             videoEncoder.encode(frame, { keyFrame: true });
             frame.close();
+
+            const currentTime = Date.now();
+            if (currentTime - lastLogTime >= 2000) {
+                const progressPercent = ((timestamp / totalMicroseconds) * 100).toFixed(2);
+                Logger.log(`비디오 생성 진행: ${(timestamp / 1_000_000).toFixed(2)}초 / ${totalVideoDuration}초 (${progressPercent}%)`);
+                lastLogTime = currentTime;
+            }
         }
 
         //draw :: final frame // for some video player
