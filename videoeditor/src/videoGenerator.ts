@@ -1,35 +1,29 @@
 import { Logger } from "./Logger.js";
 import {VideoProjectStorage,VideoTrack, Content,ContentType, ContentEffect} from "./videotrack.js";
 
-export class VideoGenerator {
-    private canvas: HTMLCanvasElement;
-    private storage: VideoProjectStorage;
+class CGlContext {
+    public gl: WebGLRenderingContext;
+    public positionLocation: number;
+    public texCoordLocation: number;
+    public resolutionLocation: WebGLUniformLocation | null;
+    public positionUniformLocation: WebGLUniformLocation | null;
+    public scaleLocation: WebGLUniformLocation | null;
+    public imageLocation: WebGLUniformLocation | null;
+    private program: WebGLProgram;
 
-
-    private gl: WebGLRenderingContext;
-    private positionLocation: number = 0;
-    private texCoordLocation: number = 0;
-    private resolutionLocation: WebGLUniformLocation | null = null;
-    private positionUniformLocation: WebGLUniformLocation | null = null;
-    private scaleLocation: WebGLUniformLocation | null = null;
-    private imageLocation: WebGLUniformLocation | null = null;
-
-    constructor(storage: VideoProjectStorage, canvas: HTMLCanvasElement) {
-        this.storage=storage;
-        this.canvas = canvas;
-
-        const gl = this.canvas.getContext('webgl');
+    constructor(canvas: HTMLCanvasElement | OffscreenCanvas) {
+        const gl = canvas.getContext('webgl');
         if (!gl) {
             Logger.log('WebGL을 지원하지 않는 브라우저');
             throw new Error('WebGL을 지원하지 않는 브라우저');
         }
         this.gl = gl;
-        this.setupWebGL();
-        this.resize(storage.getWidth(), storage.getHeight());
-    }
-
-    private setupWebGL() {
-        const gl = this.gl;
+        this.positionLocation = 0;
+        this.texCoordLocation = 0;
+        this.resolutionLocation = null;
+        this.positionUniformLocation = null;
+        this.scaleLocation = null;
+        this.imageLocation = null;
 
         const vertexShaderSource = `
             attribute vec2 a_position;
@@ -59,7 +53,7 @@ export class VideoGenerator {
         gl.compileShader(vertexShader);
         if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
             Logger.log('Vertex Shader 컴파일 실패:', gl.getShaderInfoLog(vertexShader)!);
-            return;
+            throw new Error('Vertex Shader 컴파일 실패');
         }
 
         const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER)!;
@@ -67,25 +61,25 @@ export class VideoGenerator {
         gl.compileShader(fragmentShader);
         if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
             Logger.log('Fragment Shader 컴파일 실패:', gl.getShaderInfoLog(fragmentShader)!);
-            return;
+            throw new Error('Fragment Shader 컴파일 실패');
         }
 
-        const program = gl.createProgram()!;
-        gl.attachShader(program, vertexShader);
-        gl.attachShader(program, fragmentShader);
-        gl.linkProgram(program);
-        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-            Logger.log('Program 링크 실패:', gl.getProgramInfoLog(program)!);
-            return;
+        this.program = gl.createProgram()!;
+        gl.attachShader(this.program, vertexShader);
+        gl.attachShader(this.program, fragmentShader);
+        gl.linkProgram(this.program);
+        if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) {
+            Logger.log('Program 링크 실패:', gl.getProgramInfoLog(this.program)!);
+            throw new Error('Program 링크 실패');
         }
-        gl.useProgram(program);
+        gl.useProgram(this.program);
 
-        this.positionLocation = gl.getAttribLocation(program, 'a_position');
-        this.texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
-        this.resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
-        this.positionUniformLocation = gl.getUniformLocation(program, 'u_position');
-        this.scaleLocation = gl.getUniformLocation(program, 'u_scale');
-        this.imageLocation = gl.getUniformLocation(program, 'u_image');
+        this.positionLocation = gl.getAttribLocation(this.program, 'a_position');
+        this.texCoordLocation = gl.getAttribLocation(this.program, 'a_texCoord');
+        this.resolutionLocation = gl.getUniformLocation(this.program, 'u_resolution');
+        this.positionUniformLocation = gl.getUniformLocation(this.program, 'u_position');
+        this.scaleLocation = gl.getUniformLocation(this.program, 'u_scale');
+        this.imageLocation = gl.getUniformLocation(this.program, 'u_image');
 
         const rectangle = new Float32Array([
             0.0, 0.0, 0.0, 0.0,
@@ -106,18 +100,42 @@ export class VideoGenerator {
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     }
 
-    private async processLine(gl: WebGLRenderingContext, line: VideoTrack, now: number){
+    public setViewport(width: number, height: number) {
+        this.gl.viewport(0, 0, width, height);
+        this.gl.uniform2f(this.resolutionLocation, width, height);
+    }
+}
+
+export class VideoGenerator {
+    private storage: VideoProjectStorage;
+
+    private canvas: HTMLCanvasElement;
+    private offscreenCanvas: OffscreenCanvas;
+    private glContext: CGlContext;
+    private offscreenGlContext: CGlContext;
+
+    constructor(storage: VideoProjectStorage, canvas: HTMLCanvasElement) {
+        this.storage=storage;
+        this.canvas = canvas;
+        this.offscreenCanvas = new OffscreenCanvas(storage.getWidth(), storage.getHeight());
+
+        this.glContext = new CGlContext(this.canvas);
+        this.offscreenGlContext = new CGlContext(this.offscreenCanvas);
+        this.resize(storage.getWidth(), storage.getHeight());
+    }
+
+    private async processLine(glContext: CGlContext, line: VideoTrack, now: number) {
+        const gl = glContext.gl;
         const width = this.storage.getWidth();
         const height = this.storage.getHeight();
-        this.resize(width, height);
 
         if (line.type === ContentType.image) {
-            for(const con of line.contents){
-                if(!(con.start <= now && now < con.start + con.duration))
+            for (const con of line.contents) {
+                if (!(con.start <= now && now < con.start + con.duration))
                     continue;
 
                 if (ContentEffect.DEFAULT === ContentEffect.DEFAULT) {
-                    const image:HTMLImageElement = con.content.src as HTMLImageElement;
+                    const image: HTMLImageElement = con.content.src as HTMLImageElement;
 
                     const texture = gl.createTexture();
                     gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -126,64 +144,59 @@ export class VideoGenerator {
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-                    gl.uniform2f(this.positionUniformLocation, con.x, con.y);
-                    gl.uniform2f(this.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
-                    gl.uniform1i(this.imageLocation, 0);
+                    gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
+                    gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
+                    gl.uniform1i(glContext.imageLocation, 0);
                     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-                    
+
                     gl.deleteTexture(texture);
                 }
             }
-        }
-        else if(line.type === ContentType.mp4){
-            for(const con of line.contents){
+        } else if (line.type === ContentType.mp4) {
+            for (const con of line.contents) {
                 if (!(con.start <= now && now < con.start + con.duration)) continue;
 
                 const video: HTMLVideoElement = con.content.src as HTMLVideoElement;
                 video.currentTime = (now - con.start);
-                video.muted = true;
-
-                const offscreen = new OffscreenCanvas(video.videoWidth, video.videoHeight);
-                const ctx = offscreen.getContext('2d')!;
-                video.currentTime = (now - con.start);
                 await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
-                ctx.drawImage(video, 0, 0);
-                const bitmap = offscreen.transferToImageBitmap();
 
                 const texture = gl.createTexture();
                 gl.bindTexture(gl.TEXTURE_2D, texture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-                bitmap.close();
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-                gl.uniform2f(this.positionUniformLocation, con.x, con.y);
-                gl.uniform2f(this.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
-                gl.uniform1i(this.imageLocation, 0);
+                gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
+                gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
+                gl.uniform1i(glContext.imageLocation, 0);
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
                 gl.deleteTexture(texture);
-                video.pause();
             }
         }
     }
 
     public async drawImage(now:number){
-        const gl = this.gl;
+        this._drawImage(this.glContext,now);
+    }
+
+    private async _drawImage(glContext:CGlContext,now:number){
+        const gl = this.glContext.gl;
         gl.clearColor(1, 1, 1.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         for(const line of this.storage.getTracks()){
-            await this.processLine(gl, line, now);
+            await this.processLine(glContext, line, now);
         }
     }
 
     public resize(width: number, height: number): void{
         this.canvas.width = width;
         this.canvas.height = height;
-        const gl = this.gl;
-        gl.viewport(0, 0, this.storage.getWidth(), this.storage.getHeight());
-        gl.uniform2f(this.resolutionLocation, this.storage.getWidth(), this.storage.getHeight());
+        this.offscreenCanvas.width = width;
+        this.offscreenCanvas.height = height;
+        this.glContext.setViewport(this.storage.getWidth(), this.storage.getHeight());
+        this.offscreenGlContext.setViewport(this.storage.getWidth(), this.storage.getHeight());
     }
 
     public async createVideo(): Promise<Blob | null> {
@@ -249,7 +262,22 @@ export class VideoGenerator {
             audioSampleRate = Math.max(audioSampleRate,audio.buffer.sampleRate);
             audioChannels = Math.max(audioChannels,audio.buffer.numberOfChannels);
         }
-        if (audioBuffers.length != 0) {
+        let mixedAudioBuffer: AudioBuffer | null = null;
+        if (audioBuffers.length > 0) {
+            //mix audio
+            const offlineContext = new OfflineAudioContext(
+                audioChannels,
+                totalVideoDuration * audioSampleRate,
+                audioSampleRate
+            );
+            for (const { buffer, start } of audioBuffers) {
+                const source = offlineContext.createBufferSource();
+                source.buffer = buffer;
+                source.connect(offlineContext.destination);
+                source.start(start);
+            }
+
+            mixedAudioBuffer = await offlineContext.startRendering();
             muxerOptions.audio = {
                 codec: 'aac',
                 numberOfChannels: audioChannels,
@@ -285,8 +313,8 @@ export class VideoGenerator {
         Logger.log('이미지 처리 시작');
         //draw
         for(let timestamp=0; timestamp < totalVideoDuration*1_000_000; timestamp+=1_000_000/fps){
-            await this.drawImage(timestamp/1_000_000);
-            const frame = new VideoFrame(this.canvas, {
+            await this._drawImage(this.offscreenGlContext, timestamp/1_000_000);
+            const frame = new VideoFrame(this.offscreenCanvas, {
                 timestamp: timestamp,
                 duration: fps,
             });
@@ -295,7 +323,7 @@ export class VideoGenerator {
         }
 
         //draw :: final frame // for some video player
-        const frame = new VideoFrame(this.canvas, { timestamp:totalVideoDuration*1_000_000, duration: 0 });
+        const frame = new VideoFrame(this.offscreenCanvas, { timestamp:totalVideoDuration*1_000_000, duration: 0 });
         videoEncoder.encode(frame, { keyFrame: true });
         frame.close();
 
@@ -303,7 +331,7 @@ export class VideoGenerator {
 
         Logger.log('사운드 처리 시작');
         //audio
-        if (audioBuffers.length > 0) {
+        if (mixedAudioBuffer) {
             const audioEncoder = new AudioEncoder({
                 output: (chunk: EncodedAudioChunk, meta: any) => {
                     muxer.addAudioChunk(chunk, meta);
@@ -319,39 +347,31 @@ export class VideoGenerator {
                 sampleRate: audioSampleRate,
                 bitrate: audioBitrate,
             };
-
             const audioSupport = await AudioEncoder.isConfigSupported(audioConfig);
             if (!audioSupport.supported) {
                 Logger.log('오디오 코덱이 지원되지 않습니다!');
                 return null;
             }
-
             audioEncoder.configure(audioConfig);
-                
-            for (const { buffer, start, duration } of audioBuffers) {
-                const sampleRate = buffer.sampleRate;
-                const numberOfChannels = buffer.numberOfChannels;
-                const numberOfFrames = Math.floor(duration * sampleRate);
-                const channelData = new Float32Array(numberOfFrames * numberOfChannels);
-                for (let i = 0; i < numberOfChannels; i++) {
-                    const channel = buffer.getChannelData(i);
-                    for (let j = 0; j < numberOfFrames; j++) {
-                        channelData[j * numberOfChannels + i] = j < channel.length ? channel[j] : 0;
-                    }
+            
+            const numberOfFrames = mixedAudioBuffer.length;
+            const channelData = new Float32Array(numberOfFrames * audioChannels);
+            for (let i = 0; i < audioChannels; i++) {
+                const channel = mixedAudioBuffer.getChannelData(i);
+                for (let j = 0; j < numberOfFrames; j++) {
+                    channelData[j * audioChannels + i] = j < channel.length ? channel[j] : 0;
                 }
-
-                const audioData = new AudioData({
-                    format: 'f32',
-                    sampleRate,
-                    numberOfFrames,
-                    numberOfChannels,
-                    timestamp: start * 1_000_000,
-                    data: channelData,
-                });
-
-                audioEncoder.encode(audioData);
-                audioData.close();
             }
+            const audioData = new AudioData({
+                format: 'f32',
+                sampleRate: audioSampleRate,
+                numberOfFrames,
+                numberOfChannels: audioChannels,
+                timestamp: 0,
+                data: channelData,
+            });
+            audioEncoder.encode(audioData);
+            audioData.close();
 
             await audioEncoder.flush();
         }

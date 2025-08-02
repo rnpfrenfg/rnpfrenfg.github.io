@@ -22,7 +22,6 @@ export class VideoTrack {
     }
 }
 export class VideoProjectStorage {
-    ;
     constructor() {
         this.uidcount = 0;
         this.videowidth = 1280;

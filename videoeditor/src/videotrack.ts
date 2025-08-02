@@ -49,7 +49,7 @@ export class VideoTrack{
 }
 
 export class VideoProjectStorage{
-    private uidcount: number;;
+    private uidcount: number;
     private videowidth: number;
     private videoheight: number;
     private fps: number;

@@ -568,6 +568,7 @@ function findItemAtPosition(x, y, now) {
     const scaleY = storageHeight / canvasHeight;
     const storageX = x * scaleX;
     const storageY = y * scaleY;
+    let ret = null;
     for (const track of storage.getTracks()) {
         if (track.type === ContentType.image || track.type === ContentType.mp4) {
             for (const item of track.contents) {
@@ -578,11 +579,11 @@ function findItemAtPosition(x, y, now) {
                         storageX <= item.x + scaledWidth &&
                         storageY >= item.y &&
                         storageY <= item.y + scaledHeight) {
-                        return item;
+                        ret = item;
                     }
                 }
             }
         }
     }
-    return null;
+    return ret; // find most front
 }
