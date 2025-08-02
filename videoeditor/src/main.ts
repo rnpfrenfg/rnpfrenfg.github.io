@@ -505,17 +505,25 @@ function createVideoTrackDiv(name: string, id: string): HTMLDivElement {
     const indentDiv = document.createElement('div');
     indentDiv.className = 'indent';
     const iconDiv = document.createElement('div');
-
-    const track = storage.getVideoTrack(id);
-    if (track) {
-        iconDiv.innerHTML = contnetTypeToSvg(track.type);
-    }
     const span = document.createElement('span');
     span.textContent = name;
 
     labelDiv.appendChild(indentDiv);
     labelDiv.appendChild(iconDiv);
     labelDiv.appendChild(span);
+    const track = storage.getVideoTrack(id);
+    if (track) {
+        iconDiv.innerHTML = contnetTypeToSvg(track.type);
+        
+        if(track.type == ContentType.text){
+            const button = document.createElement('button');
+            button.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>`;
+            button.className = 'cyclebutton';
+
+            button.addEventListener('click',()=>{});
+            labelDiv.appendChild(button);
+        }
+    }
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'content';
@@ -544,7 +552,7 @@ function setupDragAndDrop(timeline: HTMLDivElement) {
         e.preventDefault();
     });
 
-    timeline.addEventListener('drop', (e: DragEvent) => {
+    timeline.addEventListener('drop', async (e: DragEvent) => {
         e.preventDefault();
         if (draggedItem) {
             const trackID = timeline.id;
@@ -557,8 +565,18 @@ function setupDragAndDrop(timeline: HTMLDivElement) {
                 const scaledHeight = height * scale;
                 const offsetX = (storage.getWidth() - scaledWidth) / 2;
                 const offsetY = (storage.getHeight() - scaledHeight) / 2;
-                
-                storage.addContentToTrack(trackID,content, 2,offsetX,offsetY,scale);
+
+                let duration = 2;
+                if(content.type == ContentType.audio){
+                    const audioBuffer = content.src as AudioBuffer;
+                    duration=audioBuffer.duration;
+                }
+                else if(content.type == ContentType.mp4){
+                    const video = content.src as HTMLVideoElement;
+                    duration = video.duration;
+                }
+
+                await storage.addContentToTrackToBack(trackID,content, duration,offsetX,offsetY,scale);
                 drawStorage(storage);
             }
             draggedItem = null;

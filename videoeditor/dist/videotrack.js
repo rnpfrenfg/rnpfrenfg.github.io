@@ -16,6 +16,7 @@ export class VideoTrack {
         this.name = name;
         this.type = type;
         this.contents = [];
+        this.child = null;
     }
     getEndtime() {
         return this.contents.reduce((max, item) => Math.max(max, item.start + item.duration), 0);
@@ -49,14 +50,34 @@ export class VideoProjectStorage {
     getVideoEndTime() {
         return this.tracks.reduce((max, track) => Math.max(max, track.getEndtime()), 0);
     }
-    addContentToTrack(trackID, con, duration, x, y, scale) {
+    async addContentToTrackToBack(trackID, con, duration, x, y, scale) {
         const track = this.getVideoTrack(trackID);
         if (track === null)
             return;
         if (track.type != con.type)
             return;
         let end = track.getEndtime();
-        track.contents.push({ content: con, start: end, id: this.createUID(), duration, x, y, scale });
+        await this.addContentToTrack(trackID, con, end, duration, x, y, scale);
+    }
+    async addContentToTrack(trackID, con, start, duration, x, y, scale) {
+        const track = this.getVideoTrack(trackID);
+        if (track === null)
+            return;
+        if (track.type != con.type)
+            return;
+        track.contents.push({ content: con, start: start, id: this.createUID(), duration, x, y, scale });
+        if (track.type == ContentType.mp4) {
+            if (track.child == null)
+                track.child = this.createTrack(ContentType.audio, 'mp4/audio');
+            const video = con.src;
+            const response = await fetch(video.src);
+            const arrayBuffer = await response.arrayBuffer();
+            const audioContext = new AudioContext();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            const child = track.child;
+            const content = this.createContent(ContentType.audio, audioBuffer, con.name + '/audio', 0, 0);
+            child.contents.push({ content, start: start, id: this.createUID(), duration, x, y, scale });
+        }
     }
     getVideoTrack(id) {
         for (const d of this.tracks)

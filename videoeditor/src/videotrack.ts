@@ -36,11 +36,14 @@ export class VideoTrack{
     type: ContentType;
     contents: VideoTrackItem[];
 
+    child: VideoTrack| null;
+
     constructor(id:string, type:ContentType,name:string){
         this.id=id;
         this.name=name;
         this.type=type;
         this.contents=[];
+        this.child=null;
     }
 
     getEndtime():number{
@@ -88,13 +91,36 @@ export class VideoProjectStorage{
         return this.tracks.reduce((max, track) => Math.max(max, track.getEndtime()), 0);
     }
 
-    public addContentToTrack(trackID:string, con: Content, duration: number, x:number ,y:number, scale:number){
+    public async addContentToTrackToBack(trackID:string, con: Content, duration: number, x:number ,y:number, scale:number){
         const track = this.getVideoTrack(trackID);
         if(track === null)return;
 
         if(track.type != con.type)return;
         let end = track.getEndtime();
-        track.contents.push({content:con,start:end,id:this.createUID(),duration,x,y, scale});
+        await this.addContentToTrack(trackID,con,end,duration,x,y,scale);
+    }
+
+    public async addContentToTrack(trackID:string, con: Content, start: number, duration: number, x:number ,y:number, scale:number){
+        const track = this.getVideoTrack(trackID);
+        if(track === null)return;
+
+        if(track.type != con.type)return;
+        track.contents.push({content:con,start:start,id:this.createUID(),duration,x,y, scale});
+
+        if(track.type == ContentType.mp4){
+            if(track.child == null)
+                track.child = this.createTrack(ContentType.audio,'mp4/audio');
+
+            const video: HTMLVideoElement = con.src as HTMLVideoElement;
+            const response = await fetch(video.src);
+            const arrayBuffer = await response.arrayBuffer();
+            const audioContext = new AudioContext();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+            const child = track.child;
+            const content = this.createContent(ContentType.audio,audioBuffer,con.name+'/audio',0,0);
+            child.contents.push({content,start:start,id:this.createUID(),duration,x,y,scale});
+        }
     }
 
     public getVideoTrack(id: string):VideoTrack | null{

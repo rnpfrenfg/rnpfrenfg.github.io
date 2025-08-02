@@ -3,6 +3,7 @@ import {VideoProjectStorage,VideoTrack, Content,ContentType, ContentEffect} from
 
 class CGlContext {
     public gl: WebGLRenderingContext;
+    public texture: WebGLTexture;
     public positionLocation: number;
     public texCoordLocation: number;
     public resolutionLocation: WebGLUniformLocation | null;
@@ -98,6 +99,8 @@ class CGlContext {
 
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+        this.texture= gl.createTexture();
     }
 
     public setViewport(width: number, height: number) {
@@ -130,51 +133,34 @@ export class VideoGenerator {
 
     private async processLine(glContext: CGlContext, line: VideoTrack, now: number) {
         const gl = glContext.gl;
-        if (line.type === ContentType.image) {
-            for (const con of line.contents) {
-                if (!(con.start <= now && now < con.start + con.duration))
-                    continue;
 
-                if (ContentEffect.DEFAULT === ContentEffect.DEFAULT) {
-                    const image: HTMLImageElement = con.content.src as HTMLImageElement;
+        if(line.type == ContentType.audio)
+            return;
 
-                    const texture = gl.createTexture();
-                    gl.bindTexture(gl.TEXTURE_2D, texture);
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        if(line.type == ContentType.text) return; //TODO
 
-                    gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
-                    gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
-                    gl.uniform1i(glContext.imageLocation, 0);
-                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        for(const con of line.contents){
+            if (!(con.start <= now && now < con.start + con.duration))
+                continue;
+            gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
 
-                    gl.deleteTexture(texture);
-                }
+            if(line.type == ContentType.image){
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, con.content.src);
             }
-        } else if (line.type === ContentType.mp4) {
-            for (const con of line.contents) {
-                if (!(con.start <= now && now < con.start + con.duration)) continue;
-
+            else if(line.type === ContentType.mp4){
                 const video: HTMLVideoElement = con.content.src as HTMLVideoElement;
                 video.currentTime = (now - con.start);
                 await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
-
-                const texture = gl.createTexture();
-                gl.bindTexture(gl.TEXTURE_2D, texture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-                gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
-                gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
-                gl.uniform1i(glContext.imageLocation, 0);
-                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-                gl.deleteTexture(texture);
             }
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
+            gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
+            gl.uniform1i(glContext.imageLocation, 0);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         }
     }
 
@@ -246,6 +232,8 @@ export class VideoGenerator {
         const fps = storage.getFPS();
         const totalVideoDuration = storage.getVideoEndTime();
 
+        const functionStartTime = Date.now();
+
         this.resize(width, height);
         if (tracks.length === 0) {
             Logger.log('컨텐츠를 먼저 업로드하세요.');
@@ -272,19 +260,6 @@ export class VideoGenerator {
                         buffer: content.content.src as AudioBuffer,
                         start: content.start,
                         duration: content.duration,
-                    });
-                }
-            }else if (track.type === ContentType.mp4) {
-                for (const content of track.contents) {
-                    const video: HTMLVideoElement = content.content.src as HTMLVideoElement;
-                    const response = await fetch(video.src);
-                    const arrayBuffer = await response.arrayBuffer();
-                    const audioContext = new AudioContext();
-                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                    audioBuffers.push({
-                        buffer: audioBuffer,
-                        start: content.start,
-                        duration: Math.min(content.duration, audioBuffer.duration),
                     });
                 }
             }
@@ -341,6 +316,7 @@ export class VideoGenerator {
             height: height,
             framerate: fps,
             bitrate: 8_000_000,
+            hardwareAcceleration: 'prefer-hardware'
         };
         const support = await VideoEncoder.isConfigSupported(encoderConfig);
         if (!support.supported) {
@@ -352,6 +328,7 @@ export class VideoGenerator {
         Logger.log('이미지 처리 시작');
         let lastLogTime = Date.now();
         const totalMicroseconds = totalVideoDuration * 1_000_000;
+        let frameCount = 0;
         //draw
         for(let timestamp=0; timestamp < totalVideoDuration*1_000_000; timestamp+=1_000_000/fps){
             await this._drawImage(this.offscreenGlContext, timestamp/1_000_000);
@@ -359,13 +336,14 @@ export class VideoGenerator {
                 timestamp: timestamp,
                 duration: fps,
             });
-            videoEncoder.encode(frame, { keyFrame: true });
+            frameCount++;
+            videoEncoder.encode(frame, { keyFrame: frameCount%2==1 });
             frame.close();
 
             const currentTime = Date.now();
             if (currentTime - lastLogTime >= 2000) {
                 const progressPercent = ((timestamp / totalMicroseconds) * 100).toFixed(2);
-                Logger.log(`비디오 생성 진행: ${(timestamp / 1_000_000).toFixed(2)}초 / ${totalVideoDuration}초 (${progressPercent}%)`);
+                Logger.log(`전체 ${totalVideoDuration}초 중 ${(timestamp / 1_000_000).toFixed(2)}초 (${progressPercent}%)`);
                 lastLogTime = currentTime;
             }
         }
@@ -435,7 +413,7 @@ export class VideoGenerator {
         }
 
         const blob = new Blob([buffer], { type: 'video/mp4' });
-        Logger.log('영상 생성 완료!');
+        Logger.log(`영상 생성 완료! 소요시간 ${(Date.now() - functionStartTime)/1000}s`);
         return blob;
     }
 }
