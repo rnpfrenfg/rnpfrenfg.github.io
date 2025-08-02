@@ -219,7 +219,7 @@ function updatePropertiesPanel(element) {
                     <option value="image" ${contentType === ContentType.image ? 'selected' : ''}>Image</option>
                     <option value="audio" ${contentType === ContentType.audio ? 'selected' : ''}>Audio</option>
                     <option value="text" ${contentType === ContentType.text ? 'selected' : ''}>Text</option>
-                    <option value="mp4" ${contentType === ContentType.mp4 ? 'selected' : ''}>Text</option>
+                    <option value="mp4" ${contentType === ContentType.mp4 ? 'selected' : ''}>mp4</option>
                 </select>
             </div>
         `;
@@ -240,6 +240,23 @@ function updatePropertiesPanel(element) {
     property.appendChild(applyButton);
 }
 function updatePropertiesPanelForTrackItem(trackItem) {
+    let additionalFields = '';
+    if (trackItem.content.type === ContentType.text) {
+        additionalFields = `
+            <div>
+                <label>Font:</label>
+                <input type="text" value="${trackItem.content.src.font || '궁서체'}" data-prop="font">
+            </div>
+            <div>
+                <label>Font Size (px):</label>
+                <input type="number" value="${trackItem.content.src.fontSize || 32}" data-prop="fontSize">
+            </div>
+            <div>
+                <label>Color:</label>
+                <input type="color" value="${trackItem.content.src.color || '#FFFFFF'}" data-prop="color">
+            </div>
+        `;
+    }
     property.innerHTML = `
         <div>
             <label>Duration (s):</label>
@@ -261,6 +278,7 @@ function updatePropertiesPanelForTrackItem(trackItem) {
             <label>Scale:</label>
             <input type="number" step="0.1" value="${trackItem.scale}" data-prop="scale">
         </div>
+        ${additionalFields}
     `;
     const applyButton = document.createElement('button');
     applyButton.textContent = 'Apply';
@@ -488,7 +506,12 @@ function createVideoTrackDiv(name, id) {
             const button = document.createElement('button');
             button.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>`;
             button.className = 'cyclebutton';
-            button.addEventListener('click', () => { });
+            button.addEventListener('click', () => {
+                let t = { font: '궁서체', fontSize: 13, color: '#000000' };
+                let c = storage.createContent(ContentType.text, t, '예시 메시지', 300, 300);
+                storage.addContentToTrack(track.id, c, tlNow, 2, 300, 300, 1);
+                drawStorage(storage);
+            });
             labelDiv.appendChild(button);
         }
     }
@@ -584,7 +607,7 @@ function findItemAtPosition(x, y, now) {
     const storageY = y * scaleY;
     let ret = null;
     for (const track of storage.getTracks()) {
-        if (track.type === ContentType.image || track.type === ContentType.mp4) {
+        if (track.type === ContentType.image || track.type === ContentType.mp4 || track.type == ContentType.text) {
             for (const item of track.contents) {
                 if (item.start <= now && now < item.start + item.duration) {
                     const scaledWidth = item.content.width * item.scale;

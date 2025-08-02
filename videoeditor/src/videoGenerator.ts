@@ -1,5 +1,5 @@
 import { Logger } from "./Logger.js";
-import {VideoProjectStorage,VideoTrack, Content,ContentType, ContentEffect} from "./videotrack.js";
+import {VideoProjectStorage,VideoTrack, Content,ContentType, ContentEffect, TextSrc} from "./videotrack.js";
 
 class CGlContext {
     public gl: WebGLRenderingContext;
@@ -137,7 +137,38 @@ export class VideoGenerator {
         if(line.type == ContentType.audio)
             return;
 
-        if(line.type == ContentType.text) return; //TODO
+        if (line.type === ContentType.text) {
+            for (const con of line.contents) {
+                if (!(con.start <= now && now < con.start + con.duration)) {
+                    continue;
+                }
+                const textCanvas = new OffscreenCanvas(con.content.width, con.content.height);
+                const textCtx = textCanvas.getContext('2d');
+                if (!textCtx) {
+                    continue;
+                }
+
+                const textSrc = con.content.src as TextSrc;
+                textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
+                textCtx.font = `${textSrc.fontSize}px ${textSrc.font}`;
+                textCtx.fillStyle = textSrc.color;
+                textCtx.textAlign = 'left';
+                textCtx.textBaseline = 'top';
+                textCtx.fillText(con.content.name, 0, 0);
+
+                gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+                gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
+                gl.uniform2f(glContext.scaleLocation, con.scale * (con.content.width), con.scale * (con.content.height));
+                gl.uniform1i(glContext.imageLocation, 0);
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            }
+            return;
+        }
 
         for(const con of line.contents){
             if (!(con.start <= now && now < con.start + con.duration))
@@ -203,9 +234,8 @@ export class VideoGenerator {
     }
 
     private async _drawImage(glContext:CGlContext,now:number){
-        const gl = glContext.gl;
-        gl.clearColor(1, 1, 1, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+        glContext.gl.clearColor(1, 1, 1, 1);
+        glContext.gl.clear(glContext.gl.COLOR_BUFFER_BIT);
         for(const line of this.storage.getTracks()){
             await this.processLine(glContext, line, now);
         }

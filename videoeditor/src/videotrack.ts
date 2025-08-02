@@ -19,6 +19,12 @@ export interface Content {
     height: number;
 }
 
+export interface TextSrc{
+    font: string;
+    fontSize: number;
+    color: string;
+}
+
 export interface VideoTrackItem{
     id: string;
     content: Content;
@@ -68,9 +74,9 @@ export class VideoProjectStorage{
         this.fps = 60;
 
         this.createTrack(ContentType.audio, 'sound');
-        this.createTrack(ContentType.text, 'text');
         this.createTrack(ContentType.mp4, 'mp4');
         this.createTrack(ContentType.image, 'image');
+        this.createTrack(ContentType.text, 'text');
     }
 
     public createTrack(type: ContentType, name: string): VideoTrack{

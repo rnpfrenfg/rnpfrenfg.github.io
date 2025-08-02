@@ -31,9 +31,9 @@ export class VideoProjectStorage {
         this.contents = [];
         this.fps = 60;
         this.createTrack(ContentType.audio, 'sound');
-        this.createTrack(ContentType.text, 'text');
         this.createTrack(ContentType.mp4, 'mp4');
         this.createTrack(ContentType.image, 'image');
+        this.createTrack(ContentType.text, 'text');
     }
     createTrack(type, name) {
         let id = this.createUID();
