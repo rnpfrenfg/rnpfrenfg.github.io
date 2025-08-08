@@ -8,7 +8,6 @@ var PropertyType;
     PropertyType[PropertyType["trackheader"] = 2] = "trackheader";
 })(PropertyType || (PropertyType = {}));
 const createVideoButton = document.getElementById('createvideo');
-const addTrackButton = document.getElementById('addtrackbutton');
 const downloadLink = document.getElementById('downloadLink');
 const timelineNow = document.querySelector('.timeline-header .time');
 const timelineStart = document.getElementById('header-starttime');
@@ -21,27 +20,37 @@ const timelineruler = document.getElementById('timelineruler');
 const property = document.getElementById('properties-panel');
 const storage = new VideoProjectStorage();
 const videoGenerator = new VideoGenerator(storage, canvas);
-let selectedElement = null; // for property
+//property
+let selectedElement = null;
 let selectedElementType = PropertyType.TrackItem;
-//for mousemove on canvas
+//mousemove on canvas // move items
 let selectedTrackItem;
 let isDragging = false;
 let dragStartX = 0;
 let dragStartY = 0;
+//timeline
 let tlStart = 0;
 let tlEnd = 0;
 let tlNow = 0;
+//video preview
+let isPlaying = false;
+let playbackInterval = null;
+let audioContext = null;
+let audioSource;
 drawStorage(storage);
 document.getElementById('imageInput').addEventListener('change', handleImageInput);
 document.getElementById('audioInput').addEventListener('change', handleAudioInput);
 document.getElementById('mp4Input').addEventListener('change', handleMp4Input);
-addTrackButton.addEventListener('click', clickAddLineButton);
-createVideoButton.addEventListener('click', async () => {
+document.getElementById('previewstartbutton').addEventListener('click', startPlayback);
+document.getElementById('previewstopbutton').addEventListener('click', stopPlayback);
+document.getElementById('addtrackbutton').addEventListener('click', clickAddLineButton);
+document.getElementById('createvideo').addEventListener('click', async () => {
     try {
         createVideo();
     }
     catch (error) {
         console.error('Video creation failed:', error);
+        hideProgressModal();
     }
 });
 let isRulerDragging = false;
@@ -414,17 +423,35 @@ async function handleMp4Input(event) {
     }
 }
 async function createVideo() {
+    stopPlayback();
     createVideoButton.disabled = true;
-    const blob = await videoGenerator.createVideo();
+    showProgressModal();
+    const blob = await videoGenerator.createVideo((progress) => updateProgress(progress));
     if (blob == null) {
         Logger.log('영상 생성 실패');
+        hideProgressModal();
         return;
     }
     URL.revokeObjectURL(downloadLink.href);
     const videoUrl = URL.createObjectURL(blob);
     downloadLink.href = videoUrl;
     downloadLink.style.display = 'inline-block';
+    hideProgressModal();
     createVideoButton.disabled = false;
+}
+function updateProgress(progress) {
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+    if (progressBar && progressText) {
+        progressBar.style.width = `${progress}%`;
+        progressText.textContent = `${Math.round(progress)}%`;
+    }
+}
+function hideProgressModal() {
+    const modal = document.getElementById('progress-modal');
+    if (modal) {
+        modal.remove();
+    }
 }
 function clickAddLineButton() {
     storage.createTrack(ContentType.image, 'image');
@@ -508,9 +535,10 @@ function createVideoTrackDiv(name, id) {
             button.className = 'cyclebutton';
             button.addEventListener('click', () => {
                 let t = { font: '궁서체', fontSize: 13, color: '#000000' };
-                let c = storage.createContent(ContentType.text, t, '예시 메시지', 300, 300);
-                storage.addContentToTrack(track.id, c, tlNow, 2, 300, 300, 1);
+                let c = storage.createContent(ContentType.text, t, '예시 메시지', storage.getWidth(), 3333);
+                storage.addContentToTrack(track.id, c, tlNow, 2, storage.getWidth() / 2, storage.getHeight() * 4 / 5, 2.5);
                 drawStorage(storage);
+                videoGenerator.drawImage(tlNow);
             });
             labelDiv.appendChild(button);
         }
@@ -623,4 +651,62 @@ function findItemAtPosition(x, y, now) {
         }
     }
     return ret; // find most front
+}
+async function startPlayback() {
+    if (isPlaying)
+        return;
+    isPlaying = true;
+    audioContext = new AudioContext();
+    const audio = await videoGenerator.mixToOneAudio();
+    audioSource = audioContext.createBufferSource();
+    if (audio !== null) {
+        audioSource.buffer = audio;
+        audioSource.connect(audioContext.destination);
+    }
+    const frameDuration = 1000 / 10;
+    const startTime = performance.now() - tlNow * 1000;
+    const videoEndTime = storage.getVideoEndTime();
+    audioSource.start(0, tlNow);
+    playbackInterval = setInterval(() => {
+        const elapsed = (performance.now() - startTime) / 1000;
+        tlNow = Math.min(elapsed, videoEndTime);
+        changeTimeline(tlStart, tlEnd, tlNow);
+        videoGenerator.drawImage(tlNow);
+        if (tlNow >= videoEndTime) {
+            stopPlayback();
+        }
+    }, frameDuration);
+}
+function stopPlayback() {
+    if (!isPlaying)
+        return;
+    isPlaying = false;
+    if (playbackInterval !== null) {
+        clearInterval(playbackInterval);
+        playbackInterval = null;
+    }
+    if (audioSource !== null) {
+        audioSource.stop();
+        audioSource.disconnect();
+    }
+    if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+    }
+    changeTimeline(tlStart, tlEnd, tlNow);
+}
+function showProgressModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'progress-modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h2>비디오 생성 중...</h2>
+            <div class="progress-bar">
+                <div class="progress" id="progress-bar"></div>
+                <div class="progress-text" id="progress-text">0%</div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
 }

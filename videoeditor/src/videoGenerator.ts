@@ -119,6 +119,9 @@ export class VideoGenerator {
     private offscreenGlContext: CGlContext;
     private dbGlContext: CGlContext;
 
+    //for performance
+
+
     constructor(storage: VideoProjectStorage, canvas: HTMLCanvasElement) {
         this.storage=storage;
         this.canvas = canvas;
@@ -149,8 +152,14 @@ export class VideoGenerator {
                 }
 
                 const textSrc = con.content.src as TextSrc;
+                const measure = textCtx.measureText(con.content.name);
+                const fontSize = con.scale;
+                con.content.width=measure.width * fontSize*1.5;
+                con.content.height=fontSize *15;
+
                 textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
-                textCtx.font = `${textSrc.fontSize}px ${textSrc.font}`;
+                textCtx.font = `${textSrc.font}`;
+                textCtx.scale(fontSize,fontSize);
                 textCtx.fillStyle = textSrc.color;
                 textCtx.textAlign = 'left';
                 textCtx.textBaseline = 'top';
@@ -158,13 +167,8 @@ export class VideoGenerator {
 
                 gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
                 gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
-                gl.uniform2f(glContext.scaleLocation, con.scale * (con.content.width), con.scale * (con.content.height));
-                gl.uniform1i(glContext.imageLocation, 0);
+                gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             }
             return;
@@ -173,24 +177,21 @@ export class VideoGenerator {
         for(const con of line.contents){
             if (!(con.start <= now && now < con.start + con.duration))
                 continue;
-            gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
 
             if(line.type == ContentType.image){
+                gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, con.content.src);
             }
             else if(line.type === ContentType.mp4){
+                gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
                 const video: HTMLVideoElement = con.content.src as HTMLVideoElement;
                 video.currentTime = (now - con.start);
                 await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
             }
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
             gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
             gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
-            gl.uniform1i(glContext.imageLocation, 0);
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         }
     }
@@ -234,11 +235,62 @@ export class VideoGenerator {
     }
 
     private async _drawImage(glContext:CGlContext,now:number){
-        glContext.gl.clearColor(1, 1, 1, 1);
-        glContext.gl.clear(glContext.gl.COLOR_BUFFER_BIT);
+        const gl = glContext.gl;
+        gl.clearColor(1, 1, 1, 1);
+        gl.clear(glContext.gl.COLOR_BUFFER_BIT);
+        
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.uniform1i(glContext.imageLocation, 0);
         for(const line of this.storage.getTracks()){
             await this.processLine(glContext, line, now);
         }
+    }
+
+    public async mixToOneAudio() : Promise<AudioBuffer | null>{
+        const storage = this.storage;
+        let audioSampleRate = 0;
+        let audioChannels = 0;
+
+        let audioBuffers: { buffer: AudioBuffer; start: number; duration: number }[] = [];
+        let audioDuration: number = 0;
+        for (const track of storage.getTracks()) {
+            if (track.type === ContentType.audio) {
+                for (const content of track.contents) {
+                    audioBuffers.push({
+                        buffer: content.content.src as AudioBuffer,
+                        start: content.start,
+                        duration: content.duration,
+                    });
+                    audioDuration = Math.max(audioDuration, content.start + content.duration);
+                }
+            }
+        }
+        if(audioBuffers.length === 0)
+            return null;
+
+        for(const audio of audioBuffers){
+            audioSampleRate = Math.max(audioSampleRate,audio.buffer.sampleRate);
+            audioChannels = Math.max(audioChannels,audio.buffer.numberOfChannels);
+        }
+        let mixedAudioBuffer: AudioBuffer | null = null;
+
+        const offlineContext = new OfflineAudioContext(
+            audioChannels,
+            audioDuration * audioSampleRate,
+            audioSampleRate
+        );
+        for (const { buffer, start } of audioBuffers) {
+            const source = offlineContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(offlineContext.destination);
+            source.start(start);
+        }
+
+        mixedAudioBuffer = await offlineContext.startRendering();
+
+        return mixedAudioBuffer;
     }
 
     public resize(width: number, height: number): void{
@@ -254,13 +306,13 @@ export class VideoGenerator {
         this.dbGlContext.setViewport(this.storage.getWidth(), this.storage.getHeight());
     }
 
-    public async createVideo(): Promise<Blob | null> {
+    public async createVideo(onProgress?: (progress: number) => void): Promise<Blob | null> {
         const storage = this.storage;
         const width = storage.getWidth();
         const height = storage.getHeight();
         const tracks = storage.getTracks();
-        const fps = storage.getFPS();
         const totalVideoDuration = storage.getVideoEndTime();
+        const fps = storage.getFPS();
 
         const functionStartTime = Date.now();
 
@@ -270,6 +322,15 @@ export class VideoGenerator {
             return null;
         }
         Logger.log('영상 생성 중');
+
+        const mixedAudio = await this.mixToOneAudio();
+        let audioSampleRate = 0;
+        let audioChannels = 0;
+        let audioBitrate = 128000;
+        if(mixedAudio !== null){
+            audioSampleRate=mixedAudio.sampleRate;
+            audioChannels=mixedAudio.numberOfChannels;
+        }
 
         //init
         const muxerOptions: any = {
@@ -281,47 +342,7 @@ export class VideoGenerator {
             },
             fastStart: 'in-memory',
         };
-
-        let audioBuffers: { buffer: AudioBuffer; start: number; duration: number }[] = [];
-        for (const track of storage.getTracks()) {
-            if (track.type === ContentType.audio) {
-                for (const content of track.contents) {
-                    audioBuffers.push({
-                        buffer: content.content.src as AudioBuffer,
-                        start: content.start,
-                        duration: content.duration,
-                    });
-                }
-            }
-        }
-
-        let audioSampleRate = 0;
-        let audioChannels = 0;
-        //TODO
-        //Grok : audio bitrate = (sampleRate * numberOfChannels * bitDepth) / compressionRatio
-        //             weightedBitrate = (Σ (bitrate_i * duration_i)) / totalDuration
-        //     video bitrate = (width * height * fps * bitDepth * complexityFactor) / compressionRatio
-        let audioBitrate = 128000;
-        for(const audio of audioBuffers){
-            audioSampleRate = Math.max(audioSampleRate,audio.buffer.sampleRate);
-            audioChannels = Math.max(audioChannels,audio.buffer.numberOfChannels);
-        }
-        let mixedAudioBuffer: AudioBuffer | null = null;
-        if (audioBuffers.length > 0) {
-            //mix audio
-            const offlineContext = new OfflineAudioContext(
-                audioChannels,
-                totalVideoDuration * audioSampleRate,
-                audioSampleRate
-            );
-            for (const { buffer, start } of audioBuffers) {
-                const source = offlineContext.createBufferSource();
-                source.buffer = buffer;
-                source.connect(offlineContext.destination);
-                source.start(start);
-            }
-
-            mixedAudioBuffer = await offlineContext.startRendering();
+        if(mixedAudio !== null){
             muxerOptions.audio = {
                 codec: 'aac',
                 numberOfChannels: audioChannels,
@@ -372,8 +393,7 @@ export class VideoGenerator {
 
             const currentTime = Date.now();
             if (currentTime - lastLogTime >= 2000) {
-                const progressPercent = ((timestamp / totalMicroseconds) * 100).toFixed(2);
-                Logger.log(`전체 ${totalVideoDuration}초 중 ${(timestamp / 1_000_000).toFixed(2)}초 (${progressPercent}%)`);
+                if (onProgress) onProgress((timestamp / totalMicroseconds) * 100);
                 lastLogTime = currentTime;
             }
         }
@@ -387,7 +407,7 @@ export class VideoGenerator {
 
         Logger.log('사운드 처리 시작');
         //audio
-        if (mixedAudioBuffer) {
+        if (mixedAudio) {
             const audioEncoder = new AudioEncoder({
                 output: (chunk: EncodedAudioChunk, meta: any) => {
                     muxer.addAudioChunk(chunk, meta);
@@ -410,10 +430,10 @@ export class VideoGenerator {
             }
             audioEncoder.configure(audioConfig);
             
-            const numberOfFrames = mixedAudioBuffer.length;
+            const numberOfFrames = mixedAudio.length;
             const channelData = new Float32Array(numberOfFrames * audioChannels);
             for (let i = 0; i < audioChannels; i++) {
-                const channel = mixedAudioBuffer.getChannelData(i);
+                const channel = mixedAudio.getChannelData(i);
                 for (let j = 0; j < numberOfFrames; j++) {
                     channelData[j * audioChannels + i] = j < channel.length ? channel[j] : 0;
                 }
@@ -443,6 +463,7 @@ export class VideoGenerator {
         }
 
         const blob = new Blob([buffer], { type: 'video/mp4' });
+        if (onProgress) onProgress(100);
         Logger.log(`영상 생성 완료! 소요시간 ${(Date.now() - functionStartTime)/1000}s`);
         return blob;
     }
