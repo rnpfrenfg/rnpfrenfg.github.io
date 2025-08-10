@@ -22,7 +22,7 @@ const storage: VideoProjectStorage = new VideoProjectStorage();
 const videoGenerator: VideoGenerator = new VideoGenerator(storage,canvas);
 
 //property
-let selectedElement: HTMLElement | null = null;
+let selectedElement: string = '0';
 let selectedElementType: PropertyType = PropertyType.TrackItem;
 
 //mousemove on canvas // move items
@@ -84,7 +84,7 @@ sidebar.addEventListener('click', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     if(target.parentElement == null)return;
     if (target.classList.contains('click-layer')) {
-        selectedElement = target.parentElement;
+        selectedElement = target.parentElement.id;
         selectedElementType = PropertyType.sidebarItem;
         updatePropertiesPanel(target.parentElement);
     }
@@ -93,12 +93,12 @@ timelineTrakcs.addEventListener('click', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.classList.contains('timeline-trackheader')) {
         if(target == null) return;
-        selectedElement = target;
+        selectedElement = target.id;
         selectedElementType = PropertyType.trackheader;
         updatePropertiesPanel(target);
     }
     else if (target.classList.contains('track-bar')) {
-        selectedElement = target;
+        selectedElement = target.id;
         selectedElementType = PropertyType.TrackItem;
         updatePropertiesPanel(target);
     }
@@ -112,7 +112,7 @@ canvas.addEventListener('click', (e: MouseEvent) => {
     const hitItem = findItemAtPosition(x, y, tlNow);
     if (hitItem) {
         selectedTrackItem = hitItem;
-        selectedElement = null;
+        selectedElement = hitItem.id;
         selectedElementType = PropertyType.TrackItem;
         updatePropertiesPanelForTrackItem(hitItem);
     } else {
@@ -127,6 +127,7 @@ canvas.addEventListener('mousedown', (e: MouseEvent) => {
     const hitItem = findItemAtPosition(x, y, tlNow);
     if (hitItem) {
         selectedTrackItem = hitItem;
+        selectedElement = hitItem.id;
         selectedElementType = PropertyType.TrackItem;
         updatePropertiesPanelForTrackItem(hitItem);
         isDragging = true;
@@ -169,20 +170,15 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key === 'Delete' && selectedElement) {
         e.preventDefault();
         if (selectedElementType === PropertyType.TrackItem) {
-            const trackItem = storage.getTracks()
-                .flatMap(track => track.contents)
-                .find(item => item.id === selectedElement!.id);
-            if (trackItem) {
-                const track = storage.getTracks().find(t => t.contents.includes(trackItem));
-                if (track) {
-                    track.contents = track.contents.filter(item => item.id !== trackItem.id);
-                    drawStorage(storage);
-                    clearProperty();
-                }
-            }
+            const ret = storage.getIteamOfTrack(selectedElement);
+            if(ret == null)return;
+            const [track, trackItem] = ret;
+            track.contents = track.contents.filter(item => item.id !== trackItem.id);
+            drawStorage(storage);
+            clearProperty();
         } else if (selectedElementType === PropertyType.trackheader) {
             storage.getTracks()
-                .filter(track => track.id === selectedElement!.id)
+                .filter(track => track.id === selectedElement)
                 .forEach(track => {
                     const index = storage.getTracks().indexOf(track);
                     if (index !== -1) {
@@ -192,7 +188,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
                     }
                 });
         } else if (selectedElementType === PropertyType.sidebarItem) {
-            const content = storage.getContent(selectedElement!.id);
+            const content = storage.getContent(selectedElement);
             if (content) {
                 storage.getContents()
                     .splice(storage.getContents().findIndex(c => c.id === content.id), 1);
@@ -268,19 +264,23 @@ function updatePropertiesPanelForTrackItem(trackItem: VideoTrackItem) {
         additionalFields = `
             <div>
                 <label>Font:</label>
-                <input type="text" value="${trackItem.content.src.font || '궁서체'}" data-prop="font">
+                <input type="text" value="${trackItem.content.src.font}" data-prop="font">
             </div>
             <div>
                 <label>Font Size (px):</label>
-                <input type="number" value="${trackItem.content.src.fontSize || 32}" data-prop="fontSize">
+                <input type="number" value="${trackItem.content.src.fontSize}" data-prop="fontSize">
             </div>
             <div>
                 <label>Color:</label>
-                <input type="color" value="${trackItem.content.src.color || '#FFFFFF'}" data-prop="color">
+                <input type="color" value="${trackItem.content.src.color}" data-prop="color">
             </div>
         `;
     }
-
+    const effectOptions = Object.values(ContentEffect).map(effect => `
+        <option value="${effect}" ${trackItem.effect === effect ? 'selected' : ''}>
+            ${effect.charAt(0).toUpperCase() + effect.slice(1)}
+        </option>
+    `).join('');
     property.innerHTML = `
         <div>
             <label>Duration (s):</label>
@@ -302,6 +302,12 @@ function updatePropertiesPanelForTrackItem(trackItem: VideoTrackItem) {
             <label>Scale:</label>
             <input type="number" step="0.1" value="${trackItem.scale}" data-prop="scale">
         </div>
+        <div>
+            <label>Effect:</label>
+            <select data-prop="effect">
+                ${effectOptions}
+            </select>
+        </div>
         ${additionalFields}
     `;
 
@@ -316,7 +322,7 @@ function applyPropertyChange() {//todo : if storage size big >>>
 
     const properties: { [key: string]: string } = {};
     const inputs = property.querySelectorAll('input[data-prop], select[data-prop]');
-    const id = selectedElement.id;
+    const id = selectedElement;
 
     inputs.forEach((t) => {
         const input = t as HTMLInputElement;
@@ -341,13 +347,13 @@ function applyPropertyChange() {//todo : if storage size big >>>
         item.x=x;
         item.y=y;
         item.scale=scale;
-
+        item.effect = properties['effect'] as ContentEffect;
         drawStorage(storage);
     } else if (selectedElementType === PropertyType.trackheader) {
         const name = properties['name'];
         const contentType = properties['contentType'] as ContentType;
 
-        const track = storage.getVideoTrack(selectedElement.id);
+        const track = storage.getVideoTrack(selectedElement);
         if(track == null) return;
         if (track && track.type !== contentType) {
             track.contents=[];
@@ -357,7 +363,7 @@ function applyPropertyChange() {//todo : if storage size big >>>
         drawStorage(storage);
     } else if (selectedElementType === PropertyType.sidebarItem) {
         const name = properties['name'];
-        const content = storage.getContent(selectedElement.id);
+        const content = storage.getContent(selectedElement);
         if (content) {
             content.name = name;
             drawStorage(storage);
@@ -367,7 +373,7 @@ function applyPropertyChange() {//todo : if storage size big >>>
 
 function clearProperty(){
     property.innerHTML = '';
-    selectedElement = null;
+    selectedElement = '0';
 }
 
 function drawContent(name: string, id:string, type:ContentType){

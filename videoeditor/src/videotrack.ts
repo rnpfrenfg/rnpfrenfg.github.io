@@ -6,7 +6,8 @@ export enum ContentType {
 }
 export enum ContentEffect {
     DEFAULT = 'default',
-    RANDOM_MOVE = 'randomMove',
+    neon = 'neon',
+    glitch = 'glitch'
 }
 
 export interface Content {
@@ -34,6 +35,7 @@ export interface VideoTrackItem{
     x: number;
     y: number;
     scale:number;
+    effect: ContentEffect;
 }
 
 export class VideoTrack{
@@ -111,7 +113,7 @@ export class VideoProjectStorage{
         if(track === null)return;
 
         if(track.type != con.type)return;
-        track.contents.push({content:con,start:start,id:this.createUID(),duration,x,y, scale});
+        track.contents.push({content:con,start:start,id:this.createUID(),duration,x,y, scale, effect: ContentEffect.DEFAULT});
 
         if(track.type == ContentType.mp4){
             if(track.child == null)
@@ -125,7 +127,7 @@ export class VideoProjectStorage{
 
             const child = track.child;
             const content = this.createContent(ContentType.audio,audioBuffer,con.name+'/audio',0,0);
-            child.contents.push({content,start:start,id:this.createUID(),duration,x,y,scale});
+            child.contents.push({content,start:start,id:this.createUID(),duration,x,y,scale, effect: ContentEffect.DEFAULT});
         }
     }
 

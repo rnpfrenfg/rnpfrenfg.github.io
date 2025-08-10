@@ -1,5 +1,5 @@
 import { Logger } from "./Logger.js";
-import { ContentType } from "./videotrack.js";
+import { ContentType, ContentEffect } from "./videotrack.js";
 class CGlContext {
     constructor(canvas) {
         const gl = canvas.getContext('webgl');
@@ -8,13 +8,8 @@ class CGlContext {
             throw new Error('WebGL을 지원하지 않는 브라우저');
         }
         this.gl = gl;
-        this.positionLocation = 0;
-        this.texCoordLocation = 0;
-        this.resolutionLocation = null;
-        this.positionUniformLocation = null;
-        this.scaleLocation = null;
-        this.imageLocation = null;
         const vertexShaderSource = `
+            precision mediump float;
             attribute vec2 a_position;
             attribute vec2 a_texCoord;
             uniform vec2 u_resolution;
@@ -32,8 +27,87 @@ class CGlContext {
             precision mediump float;
             varying vec2 v_texCoord;
             uniform sampler2D u_image;
+            uniform int u_effect; // 0: default, 1: neon, 2: glitch
+            uniform float u_time;
+            uniform mediump vec2 u_resolution;
+
+            float random(vec2 st) {
+                return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);
+            }
+            vec2 randomOffset(float seed) {
+                float rx = random(vec2(seed,seed)) * 50.0 - 25.0;
+                float ry = random(vec2(seed + 1.0,seed + 1.0)) * 50.0 - 25.0;
+                return vec2(rx, ry);
+            }
+
+            vec4 neonEffect(vec2 texCoord) {
+                vec4 color = texture2D(u_image, texCoord);
+                if (color.a >= 0.95) {
+                    return color;
+                }
+
+                vec2 texelSize = 1.0 / u_resolution;
+                vec4 glow = vec4(0.0);
+                vec3 edgeColor = vec3(0.0);
+                float intensity = 0.8;
+                float edgeSamples = 0.0;
+
+                for (int i = -5; i <= 5; i++) {
+                    for (int j = -5; j <= 5; j++) {
+                        vec2 offset = vec2(float(i), float(j)) * texelSize * 1.5;
+                        vec4 sampleColor = texture2D(u_image, texCoord + offset);
+                        edgeColor += sampleColor.rgb;
+                        edgeSamples += 1.0;
+                        float distance = length(vec2(float(i), float(j)));
+                        float weight = 0.02;
+                        glow += sampleColor * weight * intensity;
+                    }
+                }
+
+                if (edgeSamples > 0.0) {
+                    edgeColor /= edgeSamples;
+                    return vec4(edgeColor * glow.a, glow.a);
+                }
+                return vec4(0.0);
+            }
+
+            vec4 glitchEffect(vec2 texCoord) {
+                float stepIndex = floor(u_time / 0.33);
+                vec2 glitchOffset = randomOffset(stepIndex);
+                
+                vec2 roffset = glitchOffset / u_resolution;
+                vec2 goffset = (glitchOffset * 0.5) / u_resolution;
+                vec2 boffset = -glitchOffset / u_resolution;
+
+                float noise = random(texCoord * 10.0);
+                float glitchStrength = step(0.9, fract(u_time * 2.0));
+
+                float r = texture2D(u_image, texCoord + roffset).r;
+                float g = texture2D(u_image, texCoord + goffset).g;
+                float b = texture2D(u_image, texCoord + boffset).b;
+                float a = 1.0;
+
+                float scanline = mod(floor(texCoord.y * u_resolution.y * (0.5 + noise * 0.2)), 2.0);
+                vec3 color = vec3(r, g, b);
+                if (scanline < 1.0 && noise > 0.7) {
+                    color *= 0.6 + noise * 0.2;
+                }
+
+                if (noise > 0.95 && glitchStrength > 0.5) {
+                    color += vec3(random(texCoord + u_time * 0.2) * 0.5);
+                }
+
+                return vec4(color, a);
+            }
+
             void main() {
-                gl_FragColor = texture2D(u_image, v_texCoord);
+                if (u_effect == 1) {
+                    gl_FragColor = neonEffect(v_texCoord);
+                } else if (u_effect == 2) {
+                    gl_FragColor = glitchEffect(v_texCoord);
+                } else {
+                    gl_FragColor = texture2D(u_image, v_texCoord);
+                }
             }
         `;
         const vertexShader = gl.createShader(gl.VERTEX_SHADER);
@@ -65,6 +139,8 @@ class CGlContext {
         this.positionUniformLocation = gl.getUniformLocation(this.program, 'u_position');
         this.scaleLocation = gl.getUniformLocation(this.program, 'u_scale');
         this.imageLocation = gl.getUniformLocation(this.program, 'u_image');
+        this.effectLocation = gl.getUniformLocation(this.program, 'u_effect');
+        this.timeLocation = gl.getUniformLocation(this.program, 'u_time');
         const rectangle = new Float32Array([
             0.0, 0.0, 0.0, 0.0,
             1.0, 0.0, 1.0, 0.0,
@@ -85,10 +161,12 @@ class CGlContext {
     setViewport(width, height) {
         this.gl.viewport(0, 0, width, height);
         this.gl.uniform2f(this.resolutionLocation, width, height);
+        if (this.resolutionLocation) {
+            this.gl.uniform2f(this.resolutionLocation, width, height);
+        }
     }
 }
 export class VideoGenerator {
-    //for performance
     constructor(storage, canvas) {
         this.storage = storage;
         this.canvas = canvas;
@@ -98,6 +176,9 @@ export class VideoGenerator {
         this.offscreenGlContext = new CGlContext(this.offscreenCanvas);
         this.dbGlContext = new CGlContext(this.doubleBuffering);
         this.resize(storage.getWidth(), storage.getHeight());
+    }
+    EffectToInt(eft) {
+        return eft === ContentEffect.neon ? 1 : eft === ContentEffect.glitch ? 2 : 0;
     }
     async processLine(glContext, line, now) {
         const gl = glContext.gl;
@@ -122,6 +203,8 @@ export class VideoGenerator {
                 textCtx.font = `${textSrc.font}`;
                 textCtx.scale(fontSize, fontSize);
                 textCtx.fillStyle = textSrc.color;
+                textCtx.strokeStyle = textSrc.color;
+                textCtx.imageSmoothingEnabled = false;
                 textCtx.textAlign = 'left';
                 textCtx.textBaseline = 'top';
                 textCtx.fillText(con.content.name, 0, 0);
@@ -129,6 +212,9 @@ export class VideoGenerator {
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
                 gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
                 gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
+                gl.uniform1i(glContext.effectLocation, this.EffectToInt(con.effect));
+                console.log(con.effect);
+                gl.uniform1f(glContext.timeLocation, now);
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             }
             return;
@@ -149,6 +235,8 @@ export class VideoGenerator {
             }
             gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
             gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
+            gl.uniform1i(glContext.effectLocation, this.EffectToInt(con.effect));
+            gl.uniform1f(glContext.timeLocation, now);
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         }
     }
@@ -181,6 +269,8 @@ export class VideoGenerator {
         gl.uniform2f(this.glContext.positionUniformLocation, 0, 0);
         gl.uniform2f(this.glContext.scaleLocation, width, height);
         gl.uniform1i(this.glContext.imageLocation, 0);
+        gl.uniform1i(this.glContext.effectLocation, 0);
+        gl.uniform1f(this.glContext.timeLocation, now);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.deleteTexture(texture);
         gl.deleteBuffer(texCoordBuffer);

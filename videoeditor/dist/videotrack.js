@@ -8,7 +8,8 @@ export var ContentType;
 export var ContentEffect;
 (function (ContentEffect) {
     ContentEffect["DEFAULT"] = "default";
-    ContentEffect["RANDOM_MOVE"] = "randomMove";
+    ContentEffect["neon"] = "neon";
+    ContentEffect["glitch"] = "glitch";
 })(ContentEffect || (ContentEffect = {}));
 export class VideoTrack {
     constructor(id, type, name) {
@@ -65,7 +66,7 @@ export class VideoProjectStorage {
             return;
         if (track.type != con.type)
             return;
-        track.contents.push({ content: con, start: start, id: this.createUID(), duration, x, y, scale });
+        track.contents.push({ content: con, start: start, id: this.createUID(), duration, x, y, scale, effect: ContentEffect.DEFAULT });
         if (track.type == ContentType.mp4) {
             if (track.child == null)
                 track.child = this.createTrack(ContentType.audio, 'mp4/audio');
@@ -76,7 +77,7 @@ export class VideoProjectStorage {
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
             const child = track.child;
             const content = this.createContent(ContentType.audio, audioBuffer, con.name + '/audio', 0, 0);
-            child.contents.push({ content, start: start, id: this.createUID(), duration, x, y, scale });
+            child.contents.push({ content, start: start, id: this.createUID(), duration, x, y, scale, effect: ContentEffect.DEFAULT });
         }
     }
     getVideoTrack(id) {
