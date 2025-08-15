@@ -55,34 +55,27 @@ class CGlContext {
             }
 
             vec4 neonEffect(vec2 texCoord) {
-                vec4 color = texture2D(u_image, texCoord);
-                if (color.a >= 0.95) {
-                    return color;
-                }
+                vec3 neonColor = vec3(1.0, 0.0, 0.0);
+                vec3 textColor = vec3(1.0);
+                const float radius = 0.02;
 
-                vec2 texelSize = 1.0 / u_resolution;
-                vec4 glow = vec4(0.0);
-                vec3 edgeColor = vec3(0.0);
-                float intensity = 0.8;
-                float edgeSamples = 0.0;
-
-                for (int i = -5; i <= 5; i++) {
-                    for (int j = -5; j <= 5; j++) {
-                        vec2 offset = vec2(float(i), float(j)) * texelSize * 1.5;
-                        vec4 sampleColor = texture2D(u_image, texCoord + offset);
-                        edgeColor += sampleColor.rgb;
-                        edgeSamples += 1.0;
-                        float distance = length(vec2(float(i), float(j)));
-                        float weight = 0.02;
-                        glow += sampleColor * weight * intensity;
+                float glow = 0.0;
+                const float step = radius / 10.0;
+                vec2 pixelSize = 1.0 / u_resolution * vec2(u_resolution.x / u_resolution.y, 1.0);
+                for (float x = -radius; x <= radius; x += step) {
+                    for (float y = -radius; y <= radius; y += step) {
+                        vec2 offset = vec2(x, y) * pixelSize;
+                        float dist = length(offset);
+                        if (dist < radius) {
+                            glow = max(glow, texture2D(u_image, texCoord + offset).a * (1.0 - dist / radius));
+                        }
                     }
                 }
 
-                if (edgeSamples > 0.0) {
-                    edgeColor /= edgeSamples;
-                    return vec4(edgeColor * glow.a, glow.a);
-                }
-                return vec4(0.0);
+                vec3 color = neonColor * glow * 1.5;
+                color += textColor * texture2D(u_image, texCoord).a;
+
+                return vec4(color, glow * 1.5);
             }
 
             vec4 glitchEffect(vec2 texCoord) {
@@ -216,75 +209,6 @@ export class VideoGenerator {
         return eft === ContentEffect.neon ? 1 : eft === ContentEffect.glitch ? 2 : 0;
     }
 
-    private async processLine(glContext: CGlContext, line: VideoTrack, now: number) {
-        const gl = glContext.gl;
-
-        if(line.type == ContentType.audio)
-            return;
-
-        if (line.type === ContentType.text) {
-            for (const con of line.contents) {
-                if (!(con.start <= now && now < con.start + con.duration)) {
-                    continue;
-                }
-                const textCanvas = new OffscreenCanvas(con.content.width, con.content.height);
-                const textCtx = textCanvas.getContext('2d');
-                if (!textCtx) {
-                    continue;
-                }
-
-                const textSrc = con.content.src as TextSrc;
-                const measure = textCtx.measureText(con.content.name);
-                const fontSize = con.scale;
-                con.content.width=measure.width * fontSize*1.5;
-                con.content.height=fontSize *15;
-
-                textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
-                textCtx.font = `${textSrc.font}`;
-                textCtx.scale(fontSize,fontSize);
-                textCtx.fillStyle = textSrc.color;
-                textCtx.strokeStyle = textSrc.color;
-                textCtx.imageSmoothingEnabled = false;
-                textCtx.textAlign = 'left';
-                textCtx.textBaseline = 'top';
-                textCtx.fillText(con.content.name, 0, 0);
-
-                gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
-                gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
-                gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
-                gl.uniform1i(glContext.effectLocation, this.EffectToInt(con.effect));
-                console.log(con.effect);
-                gl.uniform1f(glContext.timeLocation, now);
-                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-            }
-            return;
-        }
-
-        for(const con of line.contents){
-            if (!(con.start <= now && now < con.start + con.duration))
-                continue;
-
-            if(line.type == ContentType.image){
-                gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, con.content.src);
-            }
-            else if(line.type === ContentType.mp4){
-                gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
-                const video: HTMLVideoElement = con.content.src as HTMLVideoElement;
-                video.currentTime = (now - con.start);
-                await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
-            }
-
-            gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
-            gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
-            gl.uniform1i(glContext.effectLocation, this.EffectToInt(con.effect));
-            gl.uniform1f(glContext.timeLocation, now);
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-        }
-    }
-
     public async drawImage(now:number){
         await this._drawImage(this.dbGlContext,now);
         const dbGl = this.dbGlContext.gl;
@@ -335,7 +259,69 @@ export class VideoGenerator {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.uniform1i(glContext.imageLocation, 0);
         for(const line of this.storage.getTracks()){
-            await this.processLine(glContext, line, now);
+            if(line.type === ContentType.audio)
+                continue;
+
+            if (line.type === ContentType.text) {
+                for (const con of line.contents) {
+                    if (!(con.start <= now && now < con.start + con.duration)) {
+                        continue;
+                    }
+                    
+                    const fontSize = con.scale;
+                    const textCanvas = new OffscreenCanvas(con.content.width + fontSize, con.content.height + 5 * 2);
+                    const textCtx = textCanvas.getContext('2d');
+                    if (!textCtx) {
+                        continue;
+                    }
+
+                    const textSrc = con.content.src as TextSrc;
+                    const measure = textCtx.measureText(con.content.name);
+                    con.content.width=measure.width * fontSize*1.5;
+                    con.content.height=fontSize *15;
+
+                    textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
+                    textCtx.font = `${textSrc.font}`;
+                    textCtx.scale(fontSize,fontSize);
+                    textCtx.fillStyle = textSrc.color;
+                    textCtx.strokeStyle = textSrc.color;
+                    textCtx.imageSmoothingEnabled = false;
+                    textCtx.textAlign = 'left';
+                    textCtx.textBaseline = 'top';
+                    textCtx.fillText(con.content.name, fontSize, fontSize);
+
+                    gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
+                    gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
+                    gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
+                    gl.uniform1i(glContext.effectLocation, this.EffectToInt(con.effect));
+                    gl.uniform1f(glContext.timeLocation, now);
+                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                }
+                continue;
+            }
+            for(const con of line.contents){
+                if (!(con.start <= now && now < con.start + con.duration))
+                    continue;
+
+                if(line.type == ContentType.image){
+                    gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, con.content.src);
+                }
+                else if(line.type === ContentType.mp4){
+                    gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
+                    const video: HTMLVideoElement = con.content.src as HTMLVideoElement;
+                    video.currentTime = (now - con.start);
+                    await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+                }
+
+                gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
+                gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
+                gl.uniform1i(glContext.effectLocation, this.EffectToInt(con.effect));
+                gl.uniform1f(glContext.timeLocation, now);
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            }
         }
     }
 
