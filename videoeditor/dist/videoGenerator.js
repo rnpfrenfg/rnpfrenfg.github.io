@@ -1,5 +1,5 @@
 import { Logger } from "./Logger.js";
-import { ContentType, ContentEffect } from "./videotrack.js";
+import { ContentType, VideoEffectType } from "./videotrack.js";
 class CGlContext {
     constructor(canvas) {
         const gl = canvas.getContext('webgl');
@@ -171,7 +171,9 @@ export class VideoGenerator {
         this.resize(storage.getWidth(), storage.getHeight());
     }
     EffectToInt(eft) {
-        return eft === ContentEffect.neon ? 1 : eft === ContentEffect.glitch ? 2 : 0;
+        for (const c of eft)
+            return c.type === VideoEffectType.neon ? 1 : c.type === VideoEffectType.glitch ? 2 : 0;
+        return 0;
     }
     async drawImage(now) {
         await this._drawImage(this.dbGlContext, now);
@@ -220,20 +222,20 @@ export class VideoGenerator {
             if (line.type === ContentType.audio)
                 continue;
             if (line.type === ContentType.text) {
-                for (const con of line.contents) {
-                    if (!(con.start <= now && now < con.start + con.duration)) {
+                for (const item of line.items) {
+                    if (!(item.start <= now && now < item.start + item.duration)) {
                         continue;
                     }
-                    const fontSize = con.scale;
-                    const textCanvas = new OffscreenCanvas(con.content.width + fontSize, con.content.height + 5 * 2);
+                    const fontSize = item.scale;
+                    const textCanvas = new OffscreenCanvas(item.content.width + fontSize, item.content.height + 5 * 2);
                     const textCtx = textCanvas.getContext('2d');
                     if (!textCtx) {
                         continue;
                     }
-                    const textSrc = con.content.src;
-                    const measure = textCtx.measureText(con.content.name);
-                    con.content.width = measure.width * fontSize * 1.5;
-                    con.content.height = fontSize * 15;
+                    const textSrc = item.content.src;
+                    const measure = textCtx.measureText(item.content.name);
+                    item.content.width = measure.width * fontSize * 1.5;
+                    item.content.height = fontSize * 15;
                     textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
                     textCtx.font = `${textSrc.font}`;
                     textCtx.scale(fontSize, fontSize);
@@ -242,34 +244,34 @@ export class VideoGenerator {
                     textCtx.imageSmoothingEnabled = false;
                     textCtx.textAlign = 'left';
                     textCtx.textBaseline = 'top';
-                    textCtx.fillText(con.content.name, fontSize, fontSize);
+                    textCtx.fillText(item.content.name, fontSize, fontSize);
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
-                    gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
-                    gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
-                    gl.uniform1i(glContext.effectLocation, this.EffectToInt(con.effect));
+                    gl.uniform2f(glContext.positionUniformLocation, item.x, item.y);
+                    gl.uniform2f(glContext.scaleLocation, item.scale * item.content.width, item.scale * item.content.height);
+                    gl.uniform1i(glContext.effectLocation, this.EffectToInt(item.effect));
                     gl.uniform1f(glContext.timeLocation, now);
                     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
                 }
                 continue;
             }
-            for (const con of line.contents) {
-                if (!(con.start <= now && now < con.start + con.duration))
+            for (const item of line.items) {
+                if (!(item.start <= now && now < item.start + item.duration))
                     continue;
                 if (line.type == ContentType.image) {
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, con.content.src);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, item.content.src);
                 }
                 else if (line.type === ContentType.mp4) {
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
-                    const video = con.content.src;
-                    video.currentTime = (now - con.start);
+                    const video = item.content.src;
+                    video.currentTime = (now - item.start);
                     await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
                 }
-                gl.uniform2f(glContext.positionUniformLocation, con.x, con.y);
-                gl.uniform2f(glContext.scaleLocation, con.scale * con.content.width, con.scale * con.content.height);
-                gl.uniform1i(glContext.effectLocation, this.EffectToInt(con.effect));
+                gl.uniform2f(glContext.positionUniformLocation, item.x, item.y);
+                gl.uniform2f(glContext.scaleLocation, item.scale * item.content.width, item.scale * item.content.height);
+                gl.uniform1i(glContext.effectLocation, this.EffectToInt(item.effect));
                 gl.uniform1f(glContext.timeLocation, now);
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             }
@@ -283,13 +285,13 @@ export class VideoGenerator {
         let audioDuration = 0;
         for (const track of storage.getTracks()) {
             if (track.type === ContentType.audio) {
-                for (const content of track.contents) {
+                for (const item of track.items) {
                     audioBuffers.push({
-                        buffer: content.content.src,
-                        start: content.start,
-                        duration: content.duration,
+                        buffer: item.content.src,
+                        start: item.start,
+                        duration: item.duration,
                     });
-                    audioDuration = Math.max(audioDuration, content.start + content.duration);
+                    audioDuration = Math.max(audioDuration, item.start + item.duration);
                 }
             }
         }

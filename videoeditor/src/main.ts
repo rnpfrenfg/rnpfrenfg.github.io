@@ -1,6 +1,6 @@
 import {VideoGenerator} from "./videoGenerator.js";
 import { Logger } from "./Logger.js";
-import {VideoProjectStorage,VideoTrackItem,VideoTrack,ContentType,Content,ContentEffect, TextSrc } from "./videotrack.js";
+import {VideoProjectStorage,VideoTrackItem,VideoTrack,ContentType,Content,VideoEffectType, TextSrc, VideoEffect } from "./videotrack.js";
 
 enum PropertyType{
     TrackItem,sidebarItem,trackheader
@@ -22,10 +22,12 @@ const storage: VideoProjectStorage = new VideoProjectStorage();
 const videoGenerator: VideoGenerator = new VideoGenerator(storage,canvas);
 
 //property
-let selectedElement: string = '0';
+let selectedElement: string = '';
 let selectedElementType: PropertyType = PropertyType.TrackItem;
 
 //mousemove on canvas // move items
+let selectedHeader: string = '';
+selectHeader('4');
 let selectedTrackItem: VideoTrackItem;
 let isDragging = false;
 let dragStartX = 0;
@@ -45,9 +47,6 @@ let audioSource: AudioBufferSourceNode|null;
 
 drawStorage(storage);
 
-document.getElementById('imageInput')!.addEventListener('change', handleImageInput);
-document.getElementById('audioInput')!.addEventListener('change', handleAudioInput);
-document.getElementById('mp4Input')!.addEventListener('change', handleMp4Input);
 document.getElementById('previewstartbutton')!.addEventListener('click', startPlayback);
 document.getElementById('previewstopbutton')!.addEventListener('click', stopPlayback);
 document.getElementById('addtrackbutton')!.addEventListener('click', clickAddLineButton);
@@ -59,6 +58,18 @@ document.getElementById('createvideo')!.addEventListener('click', async () => {
         console.error('Video creation failed:', error);
         hideProgressModal();
     }
+});
+
+document.getElementById('mediaInput')!.addEventListener('change', async (event: Event) => {
+    const files = (event.target as HTMLInputElement).files;
+    if (!files?.length) return;
+    
+    for (const file of Array.from(files)) {
+        if (file.type.startsWith('image/')) await handleImageInput(file);
+        else if (file.type.startsWith('audio/')) await handleAudioInput(file);
+        else if (file.type === 'video/mp4') await handleMp4Input(file);
+    }
+    Logger.log('파일 불러오기 종료');
 });
 
 let isRulerDragging = false;
@@ -84,23 +95,17 @@ sidebar.addEventListener('click', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     if(target.parentElement == null)return;
     if (target.classList.contains('click-layer')) {
-        selectedElement = target.parentElement.id;
-        selectedElementType = PropertyType.sidebarItem;
-        updatePropertiesPanel(target.parentElement);
+        updatePropertiesPanel(target.parentElement.id, PropertyType.sidebarItem);
     }
 });
 timelineTrakcs.addEventListener('click', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.classList.contains('timeline-trackheader')) {
         if(target == null) return;
-        selectedElement = target.id;
-        selectedElementType = PropertyType.trackheader;
-        updatePropertiesPanel(target);
+        updatePropertiesPanel(target.id, PropertyType.trackheader);
     }
     else if (target.classList.contains('track-bar')) {
-        selectedElement = target.id;
-        selectedElementType = PropertyType.TrackItem;
-        updatePropertiesPanel(target);
+        updatePropertiesPanel(target.id, PropertyType.TrackItem);
     }
 });
 
@@ -112,9 +117,7 @@ canvas.addEventListener('click', (e: MouseEvent) => {
     const hitItem = findItemAtPosition(x, y, tlNow);
     if (hitItem) {
         selectedTrackItem = hitItem;
-        selectedElement = hitItem.id;
-        selectedElementType = PropertyType.TrackItem;
-        updatePropertiesPanelForTrackItem(hitItem);
+        updatePropertiesPanel(hitItem.id, PropertyType.TrackItem);
     } else {
         clearProperty();
     }
@@ -127,9 +130,7 @@ canvas.addEventListener('mousedown', (e: MouseEvent) => {
     const hitItem = findItemAtPosition(x, y, tlNow);
     if (hitItem) {
         selectedTrackItem = hitItem;
-        selectedElement = hitItem.id;
-        selectedElementType = PropertyType.TrackItem;
-        updatePropertiesPanelForTrackItem(hitItem);
+        updatePropertiesPanel(selectedTrackItem.id, PropertyType.TrackItem);
         isDragging = true;
         dragStartX = x - hitItem.x;
         dragStartY = y - hitItem.y;
@@ -148,7 +149,7 @@ canvas.addEventListener('mousemove', (e: MouseEvent) => {
         selectedTrackItem.x = newX;
         selectedTrackItem.y = newY;
 
-        updatePropertiesPanelForTrackItem(selectedTrackItem);
+        updatePropertiesPanel(selectedTrackItem.id, PropertyType.TrackItem);
     }
 });
 canvas.addEventListener('mouseup', () => {
@@ -163,7 +164,7 @@ canvas.addEventListener('wheel', (e: WheelEvent) => {
     selectedTrackItem.scale = selectedTrackItem.scale + selectedTrackItem.scale *0.1 *delta;
 
     videoGenerator.drawImage(tlNow);
-    updatePropertiesPanelForTrackItem(selectedTrackItem);
+    updatePropertiesPanel(selectedTrackItem.id, PropertyType.TrackItem);
 });
 
 document.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -173,7 +174,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
             const ret = storage.getIteamOfTrack(selectedElement);
             if(ret == null)return;
             const [track, trackItem] = ret;
-            track.contents = track.contents.filter(item => item.id !== trackItem.id);
+            track.items = track.items.filter(item => item.id !== trackItem.id);
             drawStorage(storage);
             clearProperty();
         } else if (selectedElementType === PropertyType.trackheader) {
@@ -210,20 +211,133 @@ function drawStorage(storage: VideoProjectStorage){
     storage.getTracks().forEach(track => {
         const trackDiv = createVideoTrackDiv(track.name,track.id);
         timelineTrakcs.appendChild(trackDiv);
-        track.contents.forEach(content => renderVideoTrackItem(content, trackDiv));
+        track.items.forEach(content => renderVideoTrackItem(content, trackDiv));
         setupDragAndDrop(trackDiv);
     });
+
+    selectHeader(selectedHeader);
 }
 
-function updatePropertiesPanel(element: HTMLElement) {
+function selectHeader(headerId: string) {
+    if (selectedHeader) {
+        const prevHeader = document.querySelector(`.timeline-trackheader[id="${selectedHeader}"]`) as HTMLElement;
+        if (prevHeader) {
+            prevHeader.classList.remove('selected');
+        }
+    }
+    const newHeader = document.querySelector(`.timeline-trackheader[id="${headerId}"]`) as HTMLElement;
+    if (newHeader) {
+        newHeader.classList.add('selected');
+    }
 
-    if (selectedElementType === PropertyType.TrackItem) {
-        const res = storage.getIteamOfTrack(element.id);
-        if(res == null)return;
-        const [track, trackItem] = res;
-        updatePropertiesPanelForTrackItem(trackItem);
-    } else if (selectedElementType === PropertyType.trackheader) {
-        const track = storage.getVideoTrack(element.id);
+    selectedHeader = headerId;
+}
+
+function updatePropertiesPanel(id: string, type: PropertyType) {
+    selectedElement = id;
+    selectedElementType = type;
+
+    if (type === PropertyType.TrackItem) {
+        const res = storage.getIteamOfTrack(id);
+        if(res == null) return;
+        const [track, item] = res;
+        let additionalFields = '';
+        if (item.content.type === ContentType.text) {
+            additionalFields = `
+                <div>
+                    <label>Font:</label>
+                    <input type="text" value="${item.content.src.font}" data-prop="font">
+                </div>
+                <div>
+                    <label>Font Size (px):</label>
+                    <input type="number" value="${item.content.src.fontSize}" data-prop="fontSize">
+                </div>
+                <div>
+                    <label>Color:</label>
+                    <input type="color" value="${item.content.src.color}" data-prop="color">
+                </div>
+            `;
+        }
+        const dummyEffect = new VideoEffect(VideoEffectType.DEFAULT);
+        const effectProps = Object.keys(dummyEffect);
+        let effectsHTML = `<div class="effects-section"><h3>Effects</h3><div class="effects-list">`;
+        item.effect.forEach((eff, index) => {
+            effectsHTML += `<div class="effect-item" data-index="${index}">`;
+            effectProps.forEach(prop => {
+                const value = eff[prop];
+                const label = prop.charAt(0).toUpperCase() + prop.slice(1);
+                if (prop === 'type') {
+                    const options = Object.values(VideoEffectType).map(val => `<option value="${val}" ${value === val ? 'selected' : ''}>${val.charAt(0).toUpperCase() + val.slice(1)}</option>`).join('');
+                    effectsHTML += `<div><label>${label}:</label><select data-prop="effect[${index}].${prop}">${options}</select></div>`;
+                } else {
+                    effectsHTML += `<div><label>${label}:</label><input type="number" value="${value}" data-prop="effect[${index}].${prop}"></div>`;
+                }
+            });
+            effectsHTML += `<button class="btn-primary" data-index="${index}">Remove</button></div>`;
+        });
+        effectsHTML += `</div><button id="add-effect" class="btn-primary">Add Effect</button></div>`;
+        property.innerHTML = `
+            <div>
+                <label>Duration (s):</label>
+                <input type="number" step="0.1" value="${item.duration}" data-prop="duration">
+            </div>
+            <div>
+                <label>Start Time (s):</label>
+                <input type="number" step="0.1" value="${item.start}" data-prop="startTime">
+            </div>
+            <div>
+                <label>X:</label>
+                <input type="number" step="0.1" value="${item.x}" data-prop="x">
+            </div>
+            <div>
+                <label>Y:</label>
+                <input type="number" step="0.1" value="${item.y}" data-prop="y">
+            </div>
+            <div>
+                <label>Scale:</label>
+                <input type="number" step="0.1" value="${item.scale}" data-prop="scale">
+            </div>
+            ${additionalFields}
+            ${effectsHTML}
+        `;
+        const addEffectBtn = property.querySelector('#add-effect') as HTMLElement;
+        addEffectBtn.addEventListener('click', () => {
+            const effectsList = property.querySelector('.effects-list') as HTMLElement;
+            const index = property.querySelectorAll('.effect-item').length;
+            let newHTML = `<div class="effect-item" data-index="${index}">`;
+            effectProps.forEach(prop => {
+                const label = prop.charAt(0).toUpperCase() + prop.slice(1);
+                if (prop === 'type') {
+                    const options = Object.values(VideoEffectType).map(val => `<option value="${val}">${val.charAt(0).toUpperCase() + val.slice(1)}</option>`).join('');
+                    newHTML += `<div><label>${label}:</label><select data-prop="effect[${index}].${prop}">${options}</select></div>`;
+                } else {
+                    newHTML += `<div><label>${label}:</label><input type="number" value="1" data-prop="effect[${index}].${prop}"></div>`;
+                }
+            });
+            newHTML += `<button class="btn-primary" data-index="${index}">Remove</button></div>`;
+            effectsList.insertAdjacentHTML('beforeend', newHTML);
+            setupRemoveListeners();
+        });
+        function setupRemoveListeners() {
+            property.querySelectorAll('.remove-effect').forEach(btn => {
+                (btn as HTMLElement).addEventListener('click', e => {
+                    const index = (btn as HTMLElement).dataset.index;
+                    const effectItem = property.querySelector(`.effect-item[data-index="${index}"]`) as HTMLElement;
+                    effectItem.remove();
+                    property.querySelectorAll('.effect-item').forEach((item, newIndex) => {
+                        (item as HTMLElement).dataset.index = newIndex.toString();
+                        item.querySelectorAll('[data-prop^="effect["]').forEach(el => {
+                            (el as HTMLElement).dataset.prop = (el as HTMLElement).dataset.prop!.replace(/effect\[\d+\]/, `effect[${newIndex}]`);
+                        });
+                        (item.querySelector('.remove-effect') as HTMLElement).dataset.index = newIndex.toString();
+                    });
+                });
+            });
+        }
+        setupRemoveListeners();
+    } else if (type === PropertyType.trackheader) {
+        selectHeader(id);
+        const track = storage.getVideoTrack(id);
         const name = track ? track.name : 'Track';
         const contentType = track ? track.type : ContentType.image;
         property.innerHTML = `
@@ -241,8 +355,8 @@ function updatePropertiesPanel(element: HTMLElement) {
                 </select>
             </div>
         `;
-    } else if (selectedElementType === PropertyType.sidebarItem) {
-        const content = storage.getContent(element.id);
+    } else if (type === PropertyType.sidebarItem) {
+        const content = storage.getContent(id);
         const name = content ? content.name : 'File';
         property.innerHTML = `
             <div>
@@ -254,100 +368,50 @@ function updatePropertiesPanel(element: HTMLElement) {
 
     const applyButton = document.createElement('button');
     applyButton.textContent = 'Apply';
+    applyButton.className = 'btn-primary';
     applyButton.addEventListener('click', applyPropertyChange);
     property.appendChild(applyButton);
 }
 
-function updatePropertiesPanelForTrackItem(trackItem: VideoTrackItem) {
-    let additionalFields = '';
-    if (trackItem.content.type === ContentType.text) {
-        additionalFields = `
-            <div>
-                <label>Font:</label>
-                <input type="text" value="${trackItem.content.src.font}" data-prop="font">
-            </div>
-            <div>
-                <label>Font Size (px):</label>
-                <input type="number" value="${trackItem.content.src.fontSize}" data-prop="fontSize">
-            </div>
-            <div>
-                <label>Color:</label>
-                <input type="color" value="${trackItem.content.src.color}" data-prop="color">
-            </div>
-        `;
-    }
-    const effectOptions = Object.values(ContentEffect).map(effect => `
-        <option value="${effect}" ${trackItem.effect === effect ? 'selected' : ''}>
-            ${effect.charAt(0).toUpperCase() + effect.slice(1)}
-        </option>
-    `).join('');
-    property.innerHTML = `
-        <div>
-            <label>Duration (s):</label>
-            <input type="number" step="0.1" value="${trackItem.duration}" data-prop="duration">
-        </div>
-        <div>
-            <label>Start Time (s):</label>
-            <input type="number" step="0.1" value="${trackItem.start}" data-prop="startTime">
-        </div>
-        <div>
-            <label>X:</label>
-            <input type="number" step="0.1" value="${trackItem.x}" data-prop="x">
-        </div>
-        <div>
-            <label>Y:</label>
-            <input type="number" step="0.1" value="${trackItem.y}" data-prop="y">
-        </div>
-        <div>
-            <label>Scale:</label>
-            <input type="number" step="0.1" value="${trackItem.scale}" data-prop="scale">
-        </div>
-        <div>
-            <label>Effect:</label>
-            <select data-prop="effect">
-                ${effectOptions}
-            </select>
-        </div>
-        ${additionalFields}
-    `;
-
-    const applyButton = document.createElement('button');
-    applyButton.textContent = 'Apply';
-    applyButton.addEventListener('click', applyPropertyChange);
-    property.appendChild(applyButton);
-}
-
-function applyPropertyChange() {//todo : if storage size big >>> 
+function applyPropertyChange() {
     if (!selectedElement) return;
 
-    const properties: { [key: string]: string } = {};
     const inputs = property.querySelectorAll('input[data-prop], select[data-prop]');
+    const properties: { [key: string]: string } = {};
+    inputs.forEach(input => {
+        properties[(input as HTMLInputElement | HTMLSelectElement).dataset.prop!] = (input as HTMLInputElement | HTMLSelectElement).value;
+    });
     const id = selectedElement;
 
-    inputs.forEach((t) => {
-        const input = t as HTMLInputElement;
-        const propName = input.dataset.prop;
-        if (propName) {
-            properties[propName] = input.value;
-        }
-    });
-
     if (selectedElementType === PropertyType.TrackItem) {
-        const duration = parseFloat(properties['duration']);
-        const startTime = parseFloat(properties['startTime']);
-        const x = parseFloat(properties['x']);
-        const y = parseFloat(properties['y']);
-        const scale = parseFloat(properties['scale']);
-        
         const res = storage.getIteamOfTrack(id);
-        if(res== null)return;
+        if(res == null) return;
         const [track, item] = res;
-        item.start = startTime;
-        item.duration = duration; // TODO : 근처 아이템 시간 밀기
-        item.x=x;
-        item.y=y;
-        item.scale=scale;
-        item.effect = properties['effect'] as ContentEffect;
+        item.start = parseFloat(properties['startTime']);
+        item.duration = parseFloat(properties['duration']);
+        item.x = parseFloat(properties['x']);
+        item.y = parseFloat(properties['y']);
+        item.scale = parseFloat(properties['scale']);
+        if (item.content.type === ContentType.text) {
+            item.content.src.font = properties['font'];
+            item.content.src.fontSize = parseFloat(properties['fontSize']);
+            item.content.src.color = properties['color'];
+        }
+        item.effect = [];
+        const dummyEffect = new VideoEffect(VideoEffectType.DEFAULT);
+        const effectProps = Object.keys(dummyEffect);
+        let index = 0;
+        while (`effect[${index}].type` in properties) {
+            const type = properties[`effect[${index}].type`] as VideoEffectType;
+            const effect = new VideoEffect(type);
+            effectProps.forEach(prop => {
+                if (prop !== 'type') {
+                    effect[prop] = parseFloat(properties[`effect[${index}].${prop}`]);
+                }
+            });
+            item.effect.push(effect);
+            index++;
+        }
         drawStorage(storage);
     } else if (selectedElementType === PropertyType.trackheader) {
         const name = properties['name'];
@@ -356,7 +420,7 @@ function applyPropertyChange() {//todo : if storage size big >>>
         const track = storage.getVideoTrack(selectedElement);
         if(track == null) return;
         if (track && track.type !== contentType) {
-            track.contents=[];
+            track.items = [];
             track.type = contentType;
         }
         track.name = name;
@@ -397,62 +461,38 @@ function drawContent(name: string, id:string, type:ContentType){
     sidebar.appendChild(div);
 }
 
-async function handleImageInput(event: Event): Promise<void> {
-    const files = (event.target as HTMLInputElement).files;
-    if (!files?.length) return;
-
-    for(const file of Array.from(files || [])){
-        if (file.type.startsWith('image/')) {
-            const img = new Image();
-            img.src = URL.createObjectURL(file);
-            await new Promise(resolve => img.onload = resolve);
-            storage.createContent(ContentType.image, img, file.name, img.naturalWidth,img.naturalHeight);
-            drawStorage(storage);
-        }
-        else{
-            Logger.log(`이미지 파일이 아닙니다.`);
-        }
-    }
-}
-
-async function handleAudioInput(event: Event): Promise<void> {
-    const files = (event.target as HTMLInputElement).files;
-    if(!files?.length)return;
-
-    for(let t=0; t<files.length;t++){
-        const file = files[t];
-        if (!file.type.startsWith('audio/')) {
-            Logger.log('오디오 파일이 아닙니다.');
-            return;
-        }
-
-        try {
-            const arrayBuffer = await file.arrayBuffer();
-            const audioContext = new AudioContext();
-            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-            storage.createContent(ContentType.audio,audioBuffer, file.name,0,0);
-            Logger.log('오디오 파일이 업로드되었습니다.');
-        } catch (e) {
-            Logger.log('오디오 로딩 실패:', (e as Error).message);
-        }
-    }
-    drawStorage(storage);
-}
-
-async function handleMp4Input(event: Event) {
-    const files = (event.target as HTMLInputElement).files;
-    if (!files?.length) return;
-
-    for (const file of Array.from(files)) {
-        if (file.type !== 'video/mp4')
-            return;
-        const videoUrl = URL.createObjectURL(file);
-        const video = document.createElement('video');
-        video.src = videoUrl;
-        await new Promise(resolve => video.onloadedmetadata = resolve);
-        storage.createContent(ContentType.mp4,video,file.name, video.videoWidth, video.videoHeight);
+async function handleImageInput(file: File) {
+    if (file.type.startsWith('image/')) {
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        await new Promise(resolve => img.onload = resolve);
+        storage.createContent(ContentType.image, img, file.name, img.naturalWidth,img.naturalHeight);
         drawStorage(storage);
     }
+}
+
+async function handleAudioInput(file: File) {
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+        const audioContext = new AudioContext();
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        storage.createContent(ContentType.audio,audioBuffer, file.name,0,0);
+        drawStorage(storage);
+        Logger.log('오디오 파일이 업로드되었습니다.');
+    } catch (e) {
+        Logger.log('오디오 로딩 실패:', (e as Error).message);
+    }
+}
+
+async function handleMp4Input(file: File) {
+    if (file.type !== 'video/mp4')
+        return;
+    const videoUrl = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.src = videoUrl;
+    await new Promise(resolve => video.onloadedmetadata = resolve);
+    storage.createContent(ContentType.mp4,video,file.name, video.videoWidth, video.videoHeight);
+    drawStorage(storage);
 }
 
 async function createVideo(){
@@ -692,20 +732,20 @@ function findItemAtPosition(x: number, y: number, now: number): VideoTrackItem |
     const storageY = y * scaleY;
 
     let ret:VideoTrackItem | null = null;
-    for (const track of storage.getTracks()) {
-        if (track.type === ContentType.image || track.type === ContentType.mp4 || track.type == ContentType.text) {
-            for (const item of track.contents) {
-                if (item.start <= now && now < item.start + item.duration) {
-                    const scaledWidth = item.content.width * item.scale;
-                    const scaledHeight = item.content.height * item.scale;
-                    if (
-                        storageX >= item.x &&
-                        storageX <= item.x + scaledWidth &&
-                        storageY >= item.y &&
-                        storageY <= item.y + scaledHeight
-                    ) {
-                        ret = item;
-                    }
+    const track = storage.getVideoTrack(selectedHeader);
+    if(track === null) return null;
+    if (track.type === ContentType.image || track.type === ContentType.mp4 || track.type == ContentType.text) {
+        for (const item of track.items) {
+            if (item.start <= now && now < item.start + item.duration) {
+                const scaledWidth = item.content.width * item.scale;
+                const scaledHeight = item.content.height * item.scale;
+                if (
+                    storageX >= item.x &&
+                    storageX <= item.x + scaledWidth &&
+                    storageY >= item.y &&
+                    storageY <= item.y + scaledHeight
+                ) {
+                    ret = item;
                 }
             }
         }

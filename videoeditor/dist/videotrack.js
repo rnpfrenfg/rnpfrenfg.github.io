@@ -5,22 +5,29 @@ export var ContentType;
     ContentType["text"] = "text";
     ContentType["mp4"] = "mp4";
 })(ContentType || (ContentType = {}));
-export var ContentEffect;
-(function (ContentEffect) {
-    ContentEffect["DEFAULT"] = "default";
-    ContentEffect["neon"] = "neon";
-    ContentEffect["glitch"] = "glitch";
-})(ContentEffect || (ContentEffect = {}));
+export var VideoEffectType;
+(function (VideoEffectType) {
+    VideoEffectType["DEFAULT"] = "default";
+    VideoEffectType["neon"] = "neon";
+    VideoEffectType["glitch"] = "glitch";
+})(VideoEffectType || (VideoEffectType = {}));
+export class VideoEffect {
+    constructor(type) {
+        this.type = type;
+        this.intensity = 1;
+        this.range = 1;
+    }
+}
 export class VideoTrack {
     constructor(id, type, name) {
         this.id = id;
         this.name = name;
         this.type = type;
-        this.contents = [];
+        this.items = [];
         this.child = null;
     }
     getEndtime() {
-        return this.contents.reduce((max, item) => Math.max(max, item.start + item.duration), 0);
+        return this.items.reduce((max, item) => Math.max(max, item.start + item.duration), 0);
     }
 }
 export class VideoProjectStorage {
@@ -66,7 +73,7 @@ export class VideoProjectStorage {
             return;
         if (track.type != con.type)
             return;
-        track.contents.push({ content: con, start: start, id: this.createUID(), duration, x, y, scale, effect: ContentEffect.DEFAULT });
+        track.items.push({ content: con, start: start, id: this.createUID(), duration, x, y, scale, effect: [] });
         if (track.type == ContentType.mp4) {
             if (track.child == null)
                 track.child = this.createTrack(ContentType.audio, 'mp4/audio');
@@ -77,7 +84,7 @@ export class VideoProjectStorage {
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
             const child = track.child;
             const content = this.createContent(ContentType.audio, audioBuffer, con.name + '/audio', 0, 0);
-            child.contents.push({ content, start: start, id: this.createUID(), duration, x, y, scale, effect: ContentEffect.DEFAULT });
+            child.items.push({ content, start: start, id: this.createUID(), duration, x, y, scale, effect: [] });
         }
     }
     getVideoTrack(id) {
@@ -91,7 +98,7 @@ export class VideoProjectStorage {
             return d; return null; }
     getIteamOfTrack(id) {
         for (const track of this.getTracks()) {
-            for (const item of track.contents)
+            for (const item of track.items)
                 if (item.id === id) {
                     return [track, item];
                 }
