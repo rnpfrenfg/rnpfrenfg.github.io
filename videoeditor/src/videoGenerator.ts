@@ -312,7 +312,7 @@ export class VideoGenerator {
                 else if(line.type === ContentType.mp4){
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
                     const video: HTMLVideoElement = item.content.src as HTMLVideoElement;
-                    video.currentTime = (now - item.start);
+                    video.currentTime = (now - item.start + item.offset);
                     await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
                 }
@@ -331,7 +331,7 @@ export class VideoGenerator {
         let audioSampleRate = 0;
         let audioChannels = 0;
 
-        let audioBuffers: { buffer: AudioBuffer; start: number; duration: number }[] = [];
+        let audioBuffers: { buffer: AudioBuffer; start: number; duration: number, offset:number }[] = [];
         let audioDuration: number = 0;
         for (const track of storage.getTracks()) {
             if (track.type === ContentType.audio) {
@@ -339,6 +339,7 @@ export class VideoGenerator {
                     audioBuffers.push({
                         buffer: item.content.src as AudioBuffer,
                         start: item.start,
+                        offset: item.offset,
                         duration: item.duration,
                     });
                     audioDuration = Math.max(audioDuration, item.start + item.duration);
@@ -359,11 +360,11 @@ export class VideoGenerator {
             audioDuration * audioSampleRate,
             audioSampleRate
         );
-        for (const { buffer, start } of audioBuffers) {
+        for (const { buffer, start, duration, offset } of audioBuffers) {
             const source = offlineContext.createBufferSource();
             source.buffer = buffer;
             source.connect(offlineContext.destination);
-            source.start(start);
+            source.start(start, offset, duration);
         }
 
         mixedAudioBuffer = await offlineContext.startRendering();

@@ -67,13 +67,13 @@ export class VideoProjectStorage {
         let end = track.getEndtime();
         await this.addContentToTrack(trackID, con, end, duration, x, y, scale);
     }
-    async addContentToTrack(trackID, con, start, duration, x, y, scale) {
+    async addContentToTrack(trackID, con, start, duration, x, y, scale, offset = 0) {
         const track = this.getVideoTrack(trackID);
         if (track === null)
             return;
         if (track.type != con.type)
             return;
-        track.items.push({ content: con, start: start, id: this.createUID(), duration, x, y, scale, effect: [] });
+        track.items.push({ content: con, start: start, id: this.createUID(), duration, x, y, scale, effect: [], offset });
         if (track.type == ContentType.mp4) {
             if (track.child == null)
                 track.child = this.createTrack(ContentType.audio, 'mp4/audio');
@@ -84,8 +84,17 @@ export class VideoProjectStorage {
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
             const child = track.child;
             const content = this.createContent(ContentType.audio, audioBuffer, con.name + '/audio', 0, 0);
-            child.items.push({ content, start: start, id: this.createUID(), duration, x, y, scale, effect: [] });
+            child.items.push({ content, start: start, id: this.createUID(), duration, x, y, scale, effect: [], offset });
         }
+    }
+    FindChild(track, target) {
+        if (track.child === null)
+            return null;
+        for (const item of track.child.items) {
+            if (item.start === target.start && item.duration === target.duration)
+                return item;
+        }
+        return null;
     }
     getVideoTrack(id) {
         for (const d of this.tracks)

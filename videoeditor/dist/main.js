@@ -21,11 +21,11 @@ const property = document.getElementById('properties-panel');
 const storage = new VideoProjectStorage();
 const videoGenerator = new VideoGenerator(storage, canvas);
 //property
-let selectedElement = '';
+let selectedElement = [];
 let selectedElementType = PropertyType.TrackItem;
 //mousemove on canvas // move items
 let selectedHeader = '';
-selectHeader('4');
+selectHeader('4'); // Image
 let selectedTrackItem;
 let isDragging = false;
 let dragStartX = 0;
@@ -88,7 +88,7 @@ sidebar.addEventListener('click', (e) => {
     if (target.parentElement == null)
         return;
     if (target.classList.contains('click-layer')) {
-        updatePropertiesPanel(target.parentElement.id, PropertyType.sidebarItem);
+        updatePropertiesPanel(target.parentElement.id, PropertyType.sidebarItem, e.shiftKey);
     }
 });
 timelineTrakcs.addEventListener('click', (e) => {
@@ -96,10 +96,10 @@ timelineTrakcs.addEventListener('click', (e) => {
     if (target.classList.contains('timeline-trackheader')) {
         if (target == null)
             return;
-        updatePropertiesPanel(target.id, PropertyType.trackheader);
+        updatePropertiesPanel(target.id, PropertyType.trackheader, e.shiftKey);
     }
     else if (target.classList.contains('track-bar')) {
-        updatePropertiesPanel(target.id, PropertyType.TrackItem);
+        updatePropertiesPanel(target.id, PropertyType.TrackItem, e.shiftKey);
     }
 });
 canvas.addEventListener('click', (e) => {
@@ -109,7 +109,7 @@ canvas.addEventListener('click', (e) => {
     const hitItem = findItemAtPosition(x, y, tlNow);
     if (hitItem) {
         selectedTrackItem = hitItem;
-        updatePropertiesPanel(hitItem.id, PropertyType.TrackItem);
+        updatePropertiesPanel(hitItem.id, PropertyType.TrackItem, false);
     }
     else {
         clearProperty();
@@ -122,7 +122,7 @@ canvas.addEventListener('mousedown', (e) => {
     const hitItem = findItemAtPosition(x, y, tlNow);
     if (hitItem) {
         selectedTrackItem = hitItem;
-        updatePropertiesPanel(selectedTrackItem.id, PropertyType.TrackItem);
+        updatePropertiesPanel(selectedTrackItem.id, PropertyType.TrackItem, false);
         isDragging = true;
         dragStartX = x - hitItem.x;
         dragStartY = y - hitItem.y;
@@ -139,7 +139,7 @@ canvas.addEventListener('mousemove', (e) => {
         const newY = y - dragStartY;
         selectedTrackItem.x = newX;
         selectedTrackItem.y = newY;
-        updatePropertiesPanel(selectedTrackItem.id, PropertyType.TrackItem);
+        updatePropertiesPanel(selectedTrackItem.id, PropertyType.TrackItem, false);
     }
 });
 canvas.addEventListener('mouseup', () => {
@@ -154,40 +154,63 @@ canvas.addEventListener('wheel', (e) => {
     const delta = e.deltaY > 0 ? -1 : 1;
     selectedTrackItem.scale = selectedTrackItem.scale + selectedTrackItem.scale * 0.1 * delta;
     videoGenerator.drawImage(tlNow);
-    updatePropertiesPanel(selectedTrackItem.id, PropertyType.TrackItem);
+    updatePropertiesPanel(selectedTrackItem.id, PropertyType.TrackItem, false);
 });
-document.addEventListener('keydown', (e) => {
+document.addEventListener('keydown', async (e) => {
     if (e.key === 'Delete' && selectedElement) {
         e.preventDefault();
+        if (selectedElement.length === 0)
+            return;
         if (selectedElementType === PropertyType.TrackItem) {
-            const ret = storage.getIteamOfTrack(selectedElement);
-            if (ret == null)
-                return;
-            const [track, trackItem] = ret;
-            track.items = track.items.filter(item => item.id !== trackItem.id);
-            drawStorage(storage);
-            clearProperty();
+            for (const track of storage.getTracks()) {
+                track.items = track.items.filter(item => !selectedElement.includes(item.id));
+            }
         }
         else if (selectedElementType === PropertyType.trackheader) {
             storage.getTracks()
-                .filter(track => track.id === selectedElement)
+                .filter(track => selectedElement.includes(track.id))
                 .forEach(track => {
                 const index = storage.getTracks().indexOf(track);
                 if (index !== -1) {
                     storage.getTracks().splice(index, 1);
-                    drawStorage(storage);
-                    clearProperty();
                 }
             });
         }
         else if (selectedElementType === PropertyType.sidebarItem) {
-            const content = storage.getContent(selectedElement);
-            if (content) {
-                storage.getContents()
-                    .splice(storage.getContents().findIndex(c => c.id === content.id), 1);
-                drawStorage(storage);
-                clearProperty();
+            selectedElement.forEach(id => {
+                const index = storage.getContents().findIndex(c => c.id === id);
+                if (index !== -1) {
+                    storage.getContents().splice(index, 1);
+                }
+            });
+        }
+        videoGenerator.drawImage(tlNow);
+        drawStorage(storage);
+        clearProperty();
+    }
+    if (e.ctrlKey) {
+        if (e.key === 'k') { // cut mp4 by tlnow
+            e.preventDefault();
+            if (selectedElementType !== PropertyType.TrackItem)
+                return;
+            if (selectedElement.length !== 1)
+                return;
+            const ret = storage.getIteamOfTrack(selectedElement[0]);
+            if (ret === null)
+                return;
+            const [track, trackitem] = ret;
+            const end = trackitem.start + trackitem.duration;
+            if (tlNow < trackitem.start || end < tlNow)
+                return;
+            const mp3 = storage.FindChild(track, trackitem);
+            trackitem.duration = tlNow - trackitem.start;
+            await storage.addContentToTrack(track.id, trackitem.content, tlNow, end - tlNow, trackitem.x, trackitem.y, trackitem.scale, tlNow - trackitem.start);
+            if (mp3 !== null && track.child !== null) {
+                mp3.duration = tlNow - trackitem.start;
             }
+            videoGenerator.drawImage(tlNow);
+            drawStorage(storage);
+            clearProperty();
         }
     }
 });
@@ -219,9 +242,14 @@ function selectHeader(headerId) {
     }
     selectedHeader = headerId;
 }
-function updatePropertiesPanel(id, type) {
-    selectedElement = id;
-    selectedElementType = type;
+function updatePropertiesPanel(id, type, isShift) {
+    if (isShift && selectedElementType == type) {
+        selectedElement.push(id);
+    }
+    else {
+        selectedElement = [id];
+        selectedElementType = type;
+    }
     if (type === PropertyType.TrackItem) {
         const res = storage.getIteamOfTrack(id);
         if (res == null)
@@ -283,6 +311,10 @@ function updatePropertiesPanel(id, type) {
             <div>
                 <label>Scale:</label>
                 <input type="number" step="0.1" value="${item.scale}" data-prop="scale">
+            </div>
+            <div>
+                <label>offset:</label>
+                <input type="number" step="0.1" value="${item.offset}" data-prop="offset">
             </div>
             ${additionalFields}
             ${effectsHTML}
@@ -369,7 +401,9 @@ function applyPropertyChange() {
     inputs.forEach(input => {
         properties[input.dataset.prop] = input.value;
     });
-    const id = selectedElement;
+    if (selectedElement.length > 1)
+        return;
+    const id = selectedElement[0];
     if (selectedElementType === PropertyType.TrackItem) {
         const res = storage.getIteamOfTrack(id);
         if (res == null)
@@ -377,6 +411,7 @@ function applyPropertyChange() {
         const [track, item] = res;
         item.start = parseFloat(properties['startTime']);
         item.duration = parseFloat(properties['duration']);
+        item.offset = parseFloat(properties['offset']);
         item.x = parseFloat(properties['x']);
         item.y = parseFloat(properties['y']);
         item.scale = parseFloat(properties['scale']);
@@ -405,7 +440,7 @@ function applyPropertyChange() {
     else if (selectedElementType === PropertyType.trackheader) {
         const name = properties['name'];
         const contentType = properties['contentType'];
-        const track = storage.getVideoTrack(selectedElement);
+        const track = storage.getVideoTrack(id);
         if (track == null)
             return;
         if (track && track.type !== contentType) {
@@ -417,7 +452,7 @@ function applyPropertyChange() {
     }
     else if (selectedElementType === PropertyType.sidebarItem) {
         const name = properties['name'];
-        const content = storage.getContent(selectedElement);
+        const content = storage.getContent(id);
         if (content) {
             content.name = name;
             drawStorage(storage);
@@ -426,7 +461,7 @@ function applyPropertyChange() {
 }
 function clearProperty() {
     property.innerHTML = '';
-    selectedElement = '0';
+    selectedElement = [];
 }
 function drawContent(name, id, type) {
     const div = document.createElement('div');

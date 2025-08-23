@@ -265,7 +265,7 @@ export class VideoGenerator {
                 else if (line.type === ContentType.mp4) {
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
                     const video = item.content.src;
-                    video.currentTime = (now - item.start);
+                    video.currentTime = (now - item.start + item.offset);
                     await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
                 }
@@ -289,6 +289,7 @@ export class VideoGenerator {
                     audioBuffers.push({
                         buffer: item.content.src,
                         start: item.start,
+                        offset: item.offset,
                         duration: item.duration,
                     });
                     audioDuration = Math.max(audioDuration, item.start + item.duration);
@@ -303,11 +304,11 @@ export class VideoGenerator {
         }
         let mixedAudioBuffer = null;
         const offlineContext = new OfflineAudioContext(audioChannels, audioDuration * audioSampleRate, audioSampleRate);
-        for (const { buffer, start } of audioBuffers) {
+        for (const { buffer, start, duration, offset } of audioBuffers) {
             const source = offlineContext.createBufferSource();
             source.buffer = buffer;
             source.connect(offlineContext.destination);
-            source.start(start);
+            source.start(start, offset, duration);
         }
         mixedAudioBuffer = await offlineContext.startRendering();
         return mixedAudioBuffer;

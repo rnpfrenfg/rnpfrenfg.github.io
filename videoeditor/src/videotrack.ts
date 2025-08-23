@@ -46,6 +46,7 @@ export interface VideoTrackItem{
     content: Content;
     start: number;
     duration: number;
+    offset: number;
     
     x: number;
     y: number;
@@ -123,12 +124,12 @@ export class VideoProjectStorage{
         await this.addContentToTrack(trackID,con,end,duration,x,y,scale);
     }
 
-    public async addContentToTrack(trackID:string, con: Content, start: number, duration: number, x:number ,y:number, scale:number){
+    public async addContentToTrack(trackID:string, con: Content, start: number, duration: number, x:number ,y:number, scale:number, offset:number = 0){
         const track = this.getVideoTrack(trackID);
         if(track === null)return;
 
         if(track.type != con.type)return;
-        track.items.push({content:con,start:start,id:this.createUID(),duration,x,y, scale, effect:[]});
+        track.items.push({content:con,start:start,id:this.createUID(),duration,x,y, scale, effect:[], offset});
 
         if(track.type == ContentType.mp4){
             if(track.child == null)
@@ -142,8 +143,17 @@ export class VideoProjectStorage{
 
             const child = track.child;
             const content = this.createContent(ContentType.audio,audioBuffer,con.name+'/audio',0,0);
-            child.items.push({content,start:start,id:this.createUID(),duration,x,y,scale, effect: []});
+            child.items.push({content,start:start,id:this.createUID(),duration,x,y,scale, effect: [], offset});
         }
+    }
+
+    public FindChild(track:VideoTrack, target: VideoTrackItem): VideoTrackItem|null{
+        if(track.child === null) return null;
+        for(const item of track.child.items){
+            if(item.start === target.start && item.duration === target.duration)
+                return item;
+        }
+        return null;
     }
 
     public getVideoTrack(id: string):VideoTrack | null{
