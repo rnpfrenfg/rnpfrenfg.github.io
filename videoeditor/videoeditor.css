@@ -669,13 +669,16 @@ canvas {
 }
 .upload-button:hover { background-color: #4b5563; }
 .sidebar-nav button, .upload-button { flex: 1; }
-
 .btn-primary {
     background-color: #3b82f6;
     color: #fff;
     margin: 8px 0; /* Added vertical spacing */
 }
-
 .btn-primary:hover {
     background-color: #2563eb;
+}
+.controls input[type="range"] {
+    width: 100px;
+    margin-left: 8px;
+    cursor: pointer;
 }

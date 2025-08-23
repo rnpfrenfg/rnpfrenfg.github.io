@@ -17,6 +17,7 @@ const canvas: HTMLCanvasElement = document.getElementById('canvas') as HTMLCanva
 const playhead: HTMLDivElement = document.getElementById('playhead') as HTMLDivElement;
 const timelineruler: HTMLDivElement = document.getElementById('timelineruler') as HTMLDivElement;
 const property: HTMLDivElement = document.getElementById('properties-panel') as HTMLDivElement;
+const previewVolumeSlider = document.getElementById('volumeSlider') as HTMLInputElement;
 
 const storage: VideoProjectStorage = new VideoProjectStorage();
 const videoGenerator: VideoGenerator = new VideoGenerator(storage,canvas);
@@ -44,6 +45,12 @@ let playbackInterval: number | null = null;
 let audioContext: AudioContext | null = null;
 let audioSource: AudioBufferSourceNode|null;
 
+let gainNode: GainNode | null = null;
+previewVolumeSlider.addEventListener('input', () => {
+    if (gainNode) {
+        gainNode.gain.value = parseFloat(previewVolumeSlider.value) / 100;
+    }
+});
 
 drawStorage(storage);
 
@@ -798,12 +805,15 @@ async function startPlayback() {
     isPlaying = true;
 
     audioContext = new AudioContext();
+    gainNode = audioContext.createGain();
+    gainNode.gain.value = parseFloat(previewVolumeSlider.value) / 100;
 
     const audio = await videoGenerator.mixToOneAudio();
     audioSource = audioContext.createBufferSource();
     if(audio !== null){
         audioSource.buffer = audio;
-        audioSource.connect(audioContext.destination);
+        audioSource.connect(gainNode);
+        gainNode.connect(audioContext.destination);
     }
 
     const frameDuration = 1000 / 10;
@@ -840,7 +850,10 @@ function stopPlayback() {
         audioContext.close();
         audioContext = null;
     }
-
+    if (gainNode) {
+        gainNode.disconnect();
+        gainNode = null;
+    }
     changeTimeline(tlStart, tlEnd, tlNow);
 }
 
