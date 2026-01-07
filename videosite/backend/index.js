@@ -3,6 +3,46 @@ const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
 
+const dbConfig = {
+  host: process.env.DB_HOST || 'db',
+  user: process.env.DB_USER,
+  password: process.env.DB_PASS,
+  database: process.env.DB_NAME
+};
+
+// 서버 시작 전 실행될 초기화 함수
+async function initDB() {
+  try {
+    const conn = await mysql.createConnection({
+      host: dbConfig.host,
+      user: dbConfig.user,
+      password: dbConfig.password,
+    });
+
+    await conn.query(`CREATE DATABASE IF NOT EXISTS ${dbConfig.database}`);
+    await conn.query(`USE ${dbConfig.database}`);
+
+    // 테이블 생성
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS channels (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        title VARCHAR(255) DEFAULT 'My Live Stream',
+        stream_key VARCHAR(255) UNIQUE NOT NULL,
+        is_live TINYINT(1) DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    console.log("✔ DB와 테이블이 준비되었습니다.");
+    await conn.end();
+  } catch (err) {
+    console.error("❌ DB 초기화 실패 (DB가 켜지는 중일 수 있습니다):", err.message);
+  }
+}
+
+// 실행
+initDB();
+
 // 1. 스트리밍 서버(NMS) 설정
 const nmsConfig = {
   rtmp: {
@@ -36,13 +76,6 @@ nms.run();
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-const dbConfig = {
-  host: 'db',
-  user: 'user',
-  password: 'password',
-  database: 'streaming_db'
-};
 
 // 3. 스트리밍 이벤트 리스너 (Nginx의 on_publish 역할 대체)
 nms.on('prePublish', async (id, StreamPath, args) => {
