@@ -101,11 +101,9 @@ sidebar.addEventListener('click', (e) => {
 timelineTrakcs.addEventListener('click', (e) => {
     const target = e.target;
     if (target.classList.contains('timeline-trackheader')) {
-        if (target == null)
-            return;
         updatePropertiesPanel(target.id, PropertyType.trackheader, e.shiftKey);
     }
-    else if (target.classList.contains('track-bar')) {
+    else if (target.classList.contains('click-layer') && target.parentElement?.classList.contains('track-bar')) {
         updatePropertiesPanel(target.id, PropertyType.TrackItem, e.shiftKey);
     }
 });
@@ -696,12 +694,47 @@ function setupDragAndDrop(timeline) {
 function renderVideoTrackItem(content, track) {
     const contentDiv = document.createElement('div');
     contentDiv.className = 'track-bar';
+    contentDiv.id = content.id;
     let startPos = videoTimeToClient(content.start);
     contentDiv.style.left = `${startPos}px`;
     contentDiv.style.width = `${videoTimeToClient(content.duration + content.start) - startPos}px`;
     contentDiv.style.backgroundColor = '#34d399';
-    contentDiv.innerHTML = `<span>${content.content.name}</span>`;
-    contentDiv.id = content.id;
+    const clickLayer = document.createElement('div');
+    clickLayer.className = 'click-layer';
+    clickLayer.id = content.id;
+    if (content.content.type === ContentType.audio) {
+        const canvas = document.createElement('canvas');
+        canvas.width = parseFloat(contentDiv.style.width);
+        canvas.height = 32;
+        const ctx = canvas.getContext('2d');
+        const audioBuffer = content.content.src;
+        const channelData = audioBuffer.getChannelData(0);
+        const samples = Math.min(channelData.length, canvas.width);
+        const step = channelData.length / samples;
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        const centerY = canvas.height / 2;
+        for (let i = 0; i < samples; i++) {
+            const sample = channelData[Math.floor(i * step)];
+            const x = (i / samples) * canvas.width;
+            const y = centerY + sample * centerY;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            }
+            else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+        contentDiv.appendChild(canvas);
+    }
+    else {
+        contentDiv.innerHTML = `<span>${content.content.name}</span>`;
+    }
+    contentDiv.appendChild(clickLayer);
     const contentArea = track.querySelector('.content');
     if (contentArea) {
         contentArea.appendChild(contentDiv);

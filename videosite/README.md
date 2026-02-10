@@ -1,5 +1,8 @@
 
+1. ffmpeg 환경 변수로 등록
 
-이 프로젝트를 실행하려면
-1. .env에서 db를 설정하세요
-2. Docker를 설치한 후 docker-compose up을 입력하세요.
+2. npm install
+
+3. npm start
+
+http://localhost:3000/

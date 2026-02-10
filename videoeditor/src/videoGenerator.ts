@@ -1,5 +1,5 @@
 import { Logger } from "./Logger.js";
-import {VideoProjectStorage,VideoTrack, Content,ContentType, TextSrc, VideoEffect, VideoEffectType} from "./videotrack.js";
+import {VideoProjectStorage, Keyframe,VideoTrack, Content,ContentType, TextSrc, VideoEffect, VideoEffectType} from "./videotrack.js";
 
 class CGlContext {
     public gl: WebGLRenderingContext;
@@ -324,6 +324,22 @@ export class VideoGenerator {
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             }
         }
+    }
+
+    private interpolateValue(keyframes: Keyframe[], prop: keyof Keyframe, now: number, defaultValue: number, targetId?: string): number {
+        if (!keyframes.length) return defaultValue;
+        let prev: Keyframe | null = null;
+        let next: Keyframe | null = null;
+        for (const kf of keyframes) {
+            if (kf.time <= now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId)) prev = kf;
+            if (kf.time > now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId) && !next) next = kf;
+        }
+        if (!prev) return defaultValue;
+        if (!next) return prev[prop] as number;
+        const t = (now - prev.time) / (next.time - prev.time);
+        const prevVal = prev[prop] as number;
+        const nextVal = next[prop] as number;
+        return prevVal + t * (nextVal - prevVal);
     }
 
     public async mixToOneAudio() : Promise<AudioBuffer | null>{

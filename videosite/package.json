@@ -1,0 +1,19 @@
+{
+  "name": "live-stream-project",
+  "version": "1.0.0",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "prestart": "npm run nginx-stop",
+    "start": "concurrently --kill-others \"npm run backend\" \"npm run frontend\" \"npm run nginx\"",
+    "backend": "cd backend && node index.js",
+    "frontend": "cd frontend && npm start",
+    "nginx": "cd nginx && nginx.exe",
+    "nginx-stop": "taskkill /f /im nginx.exe /t 2>nul || exit 0"
+  },
+  "dependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

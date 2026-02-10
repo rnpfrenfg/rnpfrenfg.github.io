@@ -41,6 +41,15 @@ export class VideoEffect{
     }
 }
 
+export interface Keyframe {
+    time: number;
+    targetId: string;
+    x?: number;
+    y?: number;
+    scale?: number;
+    effect?: VideoEffect;
+}
+
 export interface VideoTrackItem{
     id: string;
     content: Content;
@@ -52,6 +61,7 @@ export interface VideoTrackItem{
     y: number;
     scale:number;
     effect: VideoEffect[];
+    keyframes: Keyframe[];
 }
 
 export class VideoTrack{
@@ -59,6 +69,7 @@ export class VideoTrack{
     name: string;
     type: ContentType;
     items: VideoTrackItem[];
+    keyframes: Keyframe[];
 
     child: VideoTrack| null;
 
@@ -68,6 +79,7 @@ export class VideoTrack{
         this.type=type;
         this.items=[];
         this.child=null;
+        this.keyframes=[];
     }
 
     getEndtime():number{
@@ -104,6 +116,21 @@ export class VideoProjectStorage{
         return track;
     }
 
+    addTrackKeyframe(trackId: string, keyframe: Keyframe): void {
+        const track = this.getVideoTrack(trackId);
+        if (track) {
+            track.keyframes.push(keyframe);
+            track.keyframes.sort((a, b) => a.time - b.time);
+        }
+    }
+
+    removeTrackKeyframe(trackId: string, time: number): void {
+        const track = this.getVideoTrack(trackId);
+        if (track) {
+            track.keyframes = track.keyframes.filter(kf => kf.time !== time);
+        }
+    }
+
     public createContent(type:ContentType, src: any, name: string, width:number, height:number):Content{
         const id = this.createUID();
         let content:Content = {id,name,type,src,width,height };
@@ -129,7 +156,7 @@ export class VideoProjectStorage{
         if(track === null)return;
 
         if(track.type != con.type)return;
-        track.items.push({content:con,start:start,id:this.createUID(),duration,x,y, scale, effect:[], offset});
+        track.items.push({content:con,start:start,id:this.createUID(),duration,x,y, scale, effect:[], offset, keyframes:[]});
 
         if(track.type == ContentType.mp4){
             if(track.child == null)
@@ -143,7 +170,7 @@ export class VideoProjectStorage{
 
             const child = track.child;
             const content = this.createContent(ContentType.audio,audioBuffer,con.name+'/audio',0,0);
-            child.items.push({content,start:start,id:this.createUID(),duration,x,y,scale, effect: [], offset});
+            child.items.push({content,start:start,id:this.createUID(),duration,x,y,scale, effect: [], offset, keyframes:[]});
         }
     }
 

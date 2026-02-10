@@ -17,7 +17,7 @@ body {
 }
 
 .sidebar {
-    width: 16.67%; /* 1/6 */
+    width: 16.67%;
     background-color: #262626;
     border-right: 1px solid #4b5563;
     display: flex;
@@ -26,7 +26,7 @@ body {
 }
 
 .sidebar-nav {
-    height: 62.5%; /* 5/8 */
+    height: 20%;
     display: flex;
     flex-direction: column;
     padding: 8px;
@@ -56,8 +56,8 @@ body {
 }
 
 .sidebar-media {
-    height: 37.5%;
     padding: 16px;
+    overflow-x: hidden;
     overflow-y: auto;
 }
 
@@ -75,13 +75,16 @@ body {
     text-align: center;
     cursor: move;
     transition: background-color 0.2s;
-    max-width: 100%;
     height: 40px;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
     user-select: none;
+    
+    overflow-x: auto;
+    max-width: 70%;
+    width: 70%;
 }
 
 .sidebar-media .file:hover {
@@ -670,12 +673,12 @@ canvas {
 .upload-button:hover { background-color: #4b5563; }
 .sidebar-nav button, .upload-button { flex: 1; }
 .btn-primary {
-    background-color: #3b82f6;
+    background-color: #6b7280;
     color: #fff;
     margin: 8px 0; /* Added vertical spacing */
 }
 .btn-primary:hover {
-    background-color: #2563eb;
+    background-color: #6b7280;
 }
 .controls input[type="range"] {
     width: 100px;
