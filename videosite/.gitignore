@@ -6,7 +6,8 @@
 
 /node_modules
 backend/node_modules
-backend/media/
+backend/media
+backend/mediaend
 backend/.env
 frontend/node_modules
 nginx/logs

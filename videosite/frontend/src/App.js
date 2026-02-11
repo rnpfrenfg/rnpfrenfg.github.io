@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
-import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Link, useParams, NavLink, Outlet } from 'react-router-dom';
 import './App.css';
-import Hls from 'hls.js';
 import { useAuth } from './context/AuthContext';
 import { api } from './api';
 
 import Chat from './Chat';
+import VideoStream from './VideoStream';
 import Signup from './Signup';
 import Login from './Login';
 import Admin from './Admin';
@@ -43,8 +43,16 @@ function App() {
               <Route path="/login" element={<Login />} />
               <Route path="/signup" element={<Signup />} />
               <Route path="/admin" element={<Admin />} />
+              <Route path="/live/:id" element={<ViewLive />} />
               <Route path="/video/:id" element={<ViewVideo />} />
               <Route path="*" element={<ErrorPage />} />
+
+              <Route path="/channel/:channelname" element={<ChannelLayout />}>
+                <Route index element={<ChannelHome />} />
+                <Route path="videos" element={<ChannelVideos />} />
+                <Route path="community" element={<ChannelCommunity />} />
+                <Route path="about" element={<ChannelAbout />} />
+              </Route>
             </Routes>
           </div>
         </div>
@@ -143,7 +151,7 @@ function MainPage() {
           {liveList.map((u) => (
             <div key={u.username} className="live-item">
               <span className="live-username">{u.username}</span>
-              <Link to={`/video/${u.username}`}>시청하기</Link>
+              <Link to={`/live/${u.username}`}>시청하기</Link>
             </div>
           ))}
         </div>
@@ -160,80 +168,131 @@ function MainPage() {
   );
 }
 
-function ViewVideo() {
-const { id: username } = useParams();
-  const videoRef = useRef(null);
-  const hlsRef = useRef(null);
-  const [error, setError] = useState('');
+function ViewLive() {
+  const { id: username } = useParams();
 
-  useEffect(() => {
-    if (!username || !videoRef.current) return;
+  const videoRef = VideoStream(username);
+  if(videoRef === null)
+    return <div className="error"> <Link to="/">돌아가기</Link></div>;
 
-    const video = videoRef.current;
-    const hlsUrl = `http://localhost:8080/live/${username}/index.m3u8`;
-
-    if (!Hls.isSupported()) {
-      if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = hlsUrl;
-      }
-    }
-    const hls = new Hls({
-      liveSyncDurationCount: 1,
-      liveMaxLatencyDurationCount: 10,
-      maxBufferLength: 30,
-      enableWorker: true,
-      manifestLoadingMaxRetry: 10,
-      levelLoadingMaxRetry: 10,
-    });
-
-    hls.loadSource(hlsUrl);
-    hls.attachMedia(video);
-    hlsRef.current = hls;
-
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      video.play().catch(() => {
-        console.log("자동 재생이 차단되었습니다. 사용자 상호작용이 필요합니다.");
-      });
-    });
-
-    hls.on(Hls.Events.ERROR, (event, data) => {
-      if (data.fatal) {
-        switch (data.type) {
-          case Hls.ErrorTypes.NETWORK_ERROR:
-            console.log("네트워크 오류 발생, 재시도 중...");
-            hls.startLoad();
-            break;
-          case Hls.ErrorTypes.MEDIA_ERROR:
-            console.log("미디어 오류 발생, 복구 중...");
-            hls.recoverMediaError();
-            break;
-          default:
-            setError('방송을 불러올 수 없습니다.');
-            hls.destroy();
-            break;
-        }
-      }
-    });
-
-    return () => {
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-      }
-    };
-  }
-  , [username]);
-
-  if (error) return <div className="error">{error} <Link to="/">돌아가기</Link></div>;
-
+  console.log(videoRef);
   return (
     <div className="video-page-layout" style={{ display: 'flex', height: 'calc(100vh - 60px)' }}>
       <div className="video-player-container" style={{ flex: 1, padding: '20px' }}>
         <div className="player-wrapper" style={{ position: 'relative', backgroundColor: '#000' }}>
           <video ref={videoRef} controls autoPlay muted style={{ width: '100%', aspectRatio: '16/9' }} />
         </div>
-        <h3>{username} 님의 라이브</h3>
+        <h3>{username} 님의 라이브 <Link to={`/channel/${username}`}>채널로 이동</Link></h3>
       </div>
       <Chat channelOwner={username} />
+    </div>
+  );
+}
+
+function ChannelLayout() {
+  const { channelname } = useParams();
+
+  return (
+    <div className="channel-wrapper">
+      <div className="channel-header">
+        <h2>{channelname} 채널</h2>
+        <nav className="channel-tabs">
+          <NavLink to={`/channel/${channelname}`} end>홈</NavLink>
+          <NavLink to={`/channel/${channelname}/videos`}>동영상</NavLink>
+          <NavLink to={`/channel/${channelname}/community`}>커뮤니티</NavLink>
+          <NavLink to={`/channel/${channelname}/about`}>정보</NavLink>
+        </nav>
+      </div>
+      <hr />
+      
+      <div className="channel-content">
+        <Outlet context={{ channelname }} />
+      </div>
+    </div>
+  );
+}
+
+function ChannelHome() {
+  return <div>채널의 홈입니다.</div>;
+}
+
+function ChannelVideos() {
+  const { channelname } = useParams();
+  const [videos, setVideos] = useState([]);
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    const fetchVideos = async () => {
+      try {
+        const { data } = await api.get(`/api/channel/videos?channelname=${channelname}&page=${page}`);
+        setVideos(data.videos);
+      } catch (err) {
+        console.error("비디오 로드 실패", err);
+      }
+    };
+    fetchVideos();
+  }, [channelname, page]);
+
+  return (
+    <div className="video-grid">
+      {videos.map(video => (
+        <div key={video.id} className="video-card">
+          <Link to={`/video/${video.id}`}>
+            <h4>{video.title}</h4>
+            <p>{new Date(video.created_at).toLocaleDateString()}</p>
+          </Link>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ChannelCommunity() {
+  return <div>채널 게시판(커뮤니티) 공간입니다.</div>;
+}
+
+function ChannelAbout() {
+  return <div>채널 설명 및 정보 페이지입니다.</div>;
+}
+
+function ViewVideo() {
+  const { id } = useParams();
+  const [videoInfo, setVideoInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await api.get(`/api/video/info?id=${id}`);
+        setVideoInfo(data);
+        console.log(data.url);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [id]);
+
+  if (loading) return <div>로딩 중...</div>;
+  if (!videoInfo) return <div className="error">비디오를 찾을 수 없습니다. <Link to="/">돌아가기</Link></div>;
+
+  return (
+    <div className="video-page-layout" style={{ display: 'flex', height: 'calc(100vh - 60px)' }}>
+      <div className="video-player-container" style={{ flex: 1, padding: '20px' }}>
+        <div className="player-wrapper" style={{ position: 'relative', backgroundColor: '#000', aspectRatio: '16/9' }}>
+          <video 
+            src={videoInfo.url} 
+            controls 
+            autoPlay 
+            muted
+            style={{ width: '100%', height: '100%' }} 
+          />
+        </div>
+        <h3>{videoInfo.title}</h3>
+        <p>채널: <Link to={`/channel/${videoInfo.channel_name}`}>{videoInfo.channel_name}</Link></p>
+        <p>업로드 일자: {new Date(videoInfo.created_at).toLocaleString()}</p>
+      </div>
     </div>
   );
 }

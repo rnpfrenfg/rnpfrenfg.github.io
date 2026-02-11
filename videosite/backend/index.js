@@ -1,143 +1,202 @@
 const express = require('express');
 const cors = require('cors');
-const mysql = require('mysql2/promise');
 const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
+const http = require('http');
+const { WebSocketServer, WebSocket } = require('ws');
+const { initDB, dbPool } = require('./db');
+const { authMiddleware, requireAdmin, JWT_SECRET } = require('./auth');
 require('dotenv').config();
+const { exec } = require('child_process');
+const path = require('path');
 
-if (!fs.existsSync('./media')) {
-    fs.mkdirSync('./media', { recursive: true });
-}
+const NGINX_SERVER = 'http://localhost:8080';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
-const MIN_ADMIN_ROLE = 3;
-
-function generateStreamKey(userId) {
-  return `user_${userId}_${Date.now()}`;
-}
-
-const dbConfig = {
-  host: process.env.DB_HOST || 'db',
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.DB_NAME
-};
-
-async function initDB() {
-  let authenticated = false;
-  let retryCount = 0;
-  const maxRetries = 10;
-
-  while (!authenticated && retryCount < maxRetries) {
-    try {
-      console.log({
-        host: dbConfig.host,
-        user: dbConfig.user,
-        password: dbConfig.password,
-      });
-      const conn = await mysql.createConnection({
-        host: dbConfig.host,
-        user: dbConfig.user,
-        password: dbConfig.password,
-      });
-      
-      console.log("DB 접속 성공! 테이블 초기화를 시작합니다.");
-      
-      await conn.query(`CREATE DATABASE IF NOT EXISTS ${dbConfig.database}`);
-      await conn.query(`USE ${dbConfig.database}`);
-      await conn.query(`
-        CREATE TABLE IF NOT EXISTS channels (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          title VARCHAR(255) DEFAULT 'My Live Stream',
-          stream_key VARCHAR(255) UNIQUE NOT NULL,
-          is_live TINYINT(1) DEFAULT 0,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      await conn.query(`
-        CREATE TABLE IF NOT EXISTS users (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          email VARCHAR(255) UNIQUE NOT NULL,
-          username VARCHAR(100) NOT NULL,
-          password_hash VARCHAR(255) NOT NULL,
-          role TINYINT DEFAULT 1,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      await conn.query(`
-      CREATE TABLE IF NOT EXISTS chats (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        username VARCHAR(100) NOT NULL,
-        channel_owner VARCHAR(100) NOT NULL,
-        message TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-      `);
-      try {
-        await conn.query('ALTER TABLE users ADD COLUMN role TINYINT DEFAULT 1');
-      } catch (alterErr) {
-        if (alterErr.code !== 'ER_DUP_FIELDNAME') throw alterErr;
-      }
-      try {
-        await conn.query('ALTER TABLE users ADD COLUMN stream_key VARCHAR(255) UNIQUE NULL');
-      } catch (alterErr) {
-        if (alterErr.code !== 'ER_DUP_FIELDNAME') throw alterErr;
-      }
-      try {
-        await conn.query('ALTER TABLE users ADD COLUMN is_live TINYINT(1) DEFAULT 0');
-      } catch (alterErr) {
-        if (alterErr.code !== 'ER_DUP_FIELDNAME') throw alterErr;
-      }
-
-      authenticated = true;
-      await conn.end();
-      console.log("DB 초기화가 종료되었습니다.");
-    } catch (err) {
-      retryCount++;
-      console.log(`DB 접속 실패 (시도 ${retryCount}/${maxRetries}): ${err.message}`);
-      console.log("5초 후 다시 시도합니다...");
-      await new Promise(res => setTimeout(res, 5000));
+const directories = ['./media', './mediaend'];
+directories.forEach(dir => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+        console.log(`[System] 폴더 생성 완료: ${dir}`);
     }
-  }
+});
 
-  if (!authenticated) {
-    console.error("DB 접속 실패. 서버를 가동하지 않습니다.");
-    process.exit(1);
-  }
-};
+async function startServer(){
+  await initDB();
+}
 
-initDB();
+startServer();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.post('/api/auth', async (req, res) => {
-    const streamKey = req.body.name;
+const wsChannels = new Map();
 
-    const conn = await mysql.createConnection(dbConfig);
-    const [user] = await conn.execute(
-      'SELECT id FROM users WHERE stream_key = ?', 
-      [streamKey]
-    );
+function getChannelClients(channelOwner) {
+  if (!wsChannels.has(channelOwner)) {
+    wsChannels.set(channelOwner, new Set());
+  }
+  return wsChannels.get(channelOwner);
+}
 
-    if (user.length > 0) {
-      await conn.execute('UPDATE users SET is_live = 1 WHERE stream_key = ?', [streamKey]);
-      res.status(200).send();
-    } else {
-      res.status(404).send();
+function broadcastToChannel(channelOwner, payload) {
+  const clients = wsChannels.get(channelOwner);
+  if (!clients) return;
+  const serialized = JSON.stringify(payload);
+
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(serialized);
     }
-    await conn.end();
+  }
+}
+
+function decodeWsUser(token) {
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    return { id: decoded.userId, role: decoded.role };
+  } catch (err) {
+    return null;
+  }
+}
+
+//from nginx
+app.post('/api/livestartauth', async (req, res) => {
+  const streamKey = req.body.name;
+
+  const [user] = await dbPool.execute(
+    'SELECT id FROM users WHERE stream_key = ?', 
+    [streamKey]
+  );
+
+  if (user.length > 0) {
+    await dbPool.execute('UPDATE users SET is_live = 1 WHERE stream_key = ?', [streamKey]);
+    res.status(200).send();
+  } else {
+    res.status(404).send();
+  }
 });
 
+//from nginx
+app.post('/api/livedone', async (req, res) => {
+  const streamKey = req.body.name;
+
+  try {
+    const [users] = await dbPool.execute(
+        'SELECT id, username FROM users WHERE stream_key = ?', 
+        [streamKey]
+    );
+
+    if (users.length > 0) {
+      const user = users[0];
+      await dbPool.execute('UPDATE users SET is_live = 0 WHERE id = ?', [user.id]);
+
+      broadcastToChannel(user.username, { type: 'chat', message: '방송이 종료되었습니다.' });
+    }
+    res.status(200).send();
+  } catch (err) {
+    console.error(err);
+    res.status(500).send();
+  }
+});
+
+//from nginx
+app.post('/api/recorddone', async (req, res) => {
+    const streamKey = req.body.name;
+    const flvPath = req.body.path;
+    
+    if (!flvPath) return res.status(400).send('No path');
+
+    const mp4Path = flvPath.replace('.flv', '.mp4');
+    const filename = path.basename(mp4Path);
+
+    res.status(200).send('Started');
+
+    exec(`ffmpeg -y -i "${flvPath}" -c copy "${mp4Path}"`, async (error) => {
+        if (error) return console.error("FFmpeg error:", error);
+
+        try {
+            const [users] = await dbPool.execute('SELECT id, username FROM users WHERE stream_key = ?', [streamKey]);
+            if (users.length > 0) {
+                await dbPool.execute(
+                    'INSERT INTO videos (user_id, channel_name, title, filename) VALUES (?, ?, ?, ?)',
+                    [users[0].id, users[0].username, `${users[0].username}님의 다시보기`, filename]
+                );
+            }
+
+            if (fs.existsSync(flvPath)) fs.unlinkSync(flvPath);
+            
+            const hlsFolder = path.join(__dirname, 'media', streamKey);
+            if (fs.existsSync(hlsFolder)) {
+                fs.rmSync(hlsFolder, { recursive: true, force: true });
+            }
+
+            const hlsFolderPath = path.join(__dirname, 'media', streamKey);
+            if (fs.existsSync(hlsFolderPath)) {
+                fs.rmSync(hlsFolderPath, { recursive: true, force: true });
+                console.log(`[Cleanup] HLS 임시 폴더 삭제 완료: ${hlsFolderPath}`);
+            }
+        } catch (err) {
+            console.error("Post-process error:", err);
+        }
+    });
+});
+
+app.get('/api/channel/videos', async (req, res) => {
+    const channelname = req.query.channelname;
+    const page = parseInt(req.query.page) || 1; 
+    const limit = 10; 
+    const offset = (page - 1) * limit;
+
+    try {
+        const [videos] = await dbPool.query(
+            'SELECT id, title, created_at FROM videos WHERE channel_name = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+            [channelname, limit, offset]
+        );
+
+        const [totalCount] = await dbPool.query(
+            'SELECT COUNT(*) as count FROM videos WHERE channel_name = ?',
+            [channelname]
+        );
+
+        res.json({
+            videos,
+            currentPage: page,
+            totalPages: Math.ceil(totalCount[0].count / limit)
+        });
+    } catch (err) {
+        res.status(500).json({ error: '비디오 목록을 불러오지 못했습니다.' });
+    }
+});
+
+app.get('/api/video/info', async (req, res) => {
+  const videoId = req.query.id;
+  try {
+    const [rows] = await dbPool.query('SELECT * FROM videos WHERE id = ?', [videoId]);
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ error: '비디오를 찾을 수 없습니다.' });
+    }
+    const video = rows[0];
+    const fullVideoUrl = `${NGINX_SERVER}/recordings/${video.filename}`;
+    res.json({
+      ...video,
+      url: fullVideoUrl
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server Error');
+  }
+});
+
+//from nginx, url(username/filename) to streamkey/filename
 app.get('/api/proxy/:username/:filename', async (req, res) => {
     const { username, filename } = req.params;
     try {
-        const conn = await mysql.createConnection(dbConfig);
-        const [rows] = await conn.execute('SELECT stream_key FROM users WHERE username = ?', [username]);
-        await conn.end();
+        const [rows] = await dbPool.execute('SELECT stream_key FROM users WHERE username = ?', [username]);
 
         if (rows.length === 0) return res.status(404).send('User not found');
         
@@ -154,11 +213,9 @@ app.get('/api/proxy/:username/:filename', async (req, res) => {
 
 app.get('/api/live', async (req, res) => {
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute(
+    const [rows] = await dbPool.execute(
       'SELECT id, username FROM users WHERE is_live = 1 AND stream_key IS NOT NULL'
     );
-    await conn.end();
     res.json(rows);
   } catch (err) {
     console.error('라이브 목록 조회 오류:', err);
@@ -166,15 +223,17 @@ app.get('/api/live', async (req, res) => {
   }
 });
 
+app.get('/api/liveurl', async (req, res) => {
+  res.status(201).send({url:`${NGINX_SERVER}/live/${req.query.channel}/index.m3u8`})
+});
+
 app.get('/api/livechat/:username', async (req, res) => {
   const channelOwner = req.params.username;
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute(
+    const [rows] = await dbPool.execute(
       'SELECT username, message, created_at FROM chats WHERE channel_owner = ? ORDER BY created_at DESC LIMIT 30',
       [channelOwner]
     );
-    conn.end();
     res.json(rows.reverse());
   } catch (err) {
     res.status(500).json({ error: '채팅을 불러오지 못했습니다.' });
@@ -184,46 +243,41 @@ app.get('/api/livechat/:username', async (req, res) => {
 
 app.post('/api/livechat/:username', authMiddleware, async (req, res) => {
   const channelOwner = req.params.username;
-  const { message } = req.body;
+  const message = (req.body.message || '').trim();
+
+  if (!message) {
+    return res.status(400).json({ error: '메시지를 입력해주세요.' });
+  }
   
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    const [userRows] = await conn.execute('SELECT username FROM users WHERE id = ?', [req.user.id]);
+    const [userRows] = await dbPool.execute('SELECT username FROM users WHERE id = ?', [req.user.id]);
+    if (userRows.length === 0) {
+      return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
+    }
     const senderName = userRows[0].username;
 
-    await conn.execute(
+    await dbPool.execute(
       'INSERT INTO chats (username, channel_owner, message) VALUES (?, ?, ?)',
       [senderName, channelOwner, message]
     );
-    conn.end();
-    res.status(201).json({ success: true });
+
+    const chatMessage = {
+      username: senderName,
+      message,
+      created_at: new Date().toISOString(),
+    };
+
+    broadcastToChannel(channelOwner, {
+      type: 'chat',
+      message: chatMessage,
+    });
+
+    res.status(201).json({ success: true, message: chatMessage });
   } catch (err) {
     res.status(500).json({ error: '채팅 전송 실패' });
     console.log(err);
   }
 });
-
-function authMiddleware(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '로그인이 필요합니다.' });
-  }
-  const token = authHeader.slice(7);
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = { id: decoded.userId, role: decoded.role };
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: '유효하지 않거나 만료된 토큰입니다.' });
-  }
-}
-
-function requireAdmin(req, res, next) {
-  if (req.user.role < MIN_ADMIN_ROLE) {
-    return res.status(403).json({ error: '관리자 권한이 필요합니다.' });
-  }
-  next();
-}
 
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
@@ -231,12 +285,10 @@ app.post('/api/login', async (req, res) => {
     return res.status(400).json({ error: '이메일과 비밀번호를 입력해주세요.' });
   }
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute(
+    const [rows] = await dbPool.execute(
       'SELECT id, email, username, password_hash, role FROM users WHERE email = ?',
       [email.trim()]
     );
-    await conn.end();
     if (rows.length === 0) {
       return res.status(401).json({ error: '이메일 또는 비밀번호가 올바르지 않습니다.' });
     }
@@ -270,15 +322,13 @@ app.post('/api/signup', async (req, res) => {
   }
   try {
     const password_hash = await bcrypt.hash(password, 10);
-    const conn = await mysql.createConnection(dbConfig);
-    const [result] = await conn.execute(
+    const [result] = await dbPool.execute(
       'INSERT INTO users (email, username, password_hash, role) VALUES (?, ?, ?, 1)',
       [email.trim(), username.trim(), password_hash]
     );
     const userId = result.insertId;
     const stream_key = generateStreamKey(userId);
-    await conn.execute('UPDATE users SET stream_key = ? WHERE id = ?', [stream_key, userId]);
-    await conn.end();
+    await dbPool.execute('UPDATE users SET stream_key = ? WHERE id = ?', [stream_key, userId]);
     res.status(201).json({ message: '회원가입이 완료되었습니다.' });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
@@ -291,21 +341,18 @@ app.post('/api/signup', async (req, res) => {
 
 app.get('/api/me/stream-key', authMiddleware, async (req, res) => {
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    let [rows] = await conn.execute(
+    let [rows] = await dbPool.execute(
       'SELECT stream_key FROM users WHERE id = ?',
       [req.user.id]
     );
     if (rows.length === 0) {
-      await conn.end();
       return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
     }
     let stream_key = rows[0].stream_key;
     if (!stream_key) {
       stream_key = generateStreamKey(req.user.id);
-      await conn.execute('UPDATE users SET stream_key = ? WHERE id = ?', [stream_key, req.user.id]);
+      await dbPool.execute('UPDATE users SET stream_key = ? WHERE id = ?', [stream_key, req.user.id]);
     }
-    await conn.end();
     res.json({ stream_key });
   } catch (err) {
     console.error('스트림 키 조회 오류:', err);
@@ -316,9 +363,7 @@ app.get('/api/me/stream-key', authMiddleware, async (req, res) => {
 app.post('/api/me/stream-key/regenerate', authMiddleware, async (req, res) => {
   try {
     const stream_key = generateStreamKey(req.user.id);
-    const conn = await mysql.createConnection(dbConfig);
-    await conn.execute('UPDATE users SET stream_key = ? WHERE id = ?', [stream_key, req.user.id]);
-    await conn.end();
+    await dbPool.execute('UPDATE users SET stream_key = ? WHERE id = ?', [stream_key, req.user.id]);
     res.json({ message: '새 스트림 키가 발급되었습니다.', stream_key });
   } catch (err) {
     console.error('스트림 키 재발급 오류:', err);
@@ -328,11 +373,9 @@ app.post('/api/me/stream-key/regenerate', authMiddleware, async (req, res) => {
 
 app.get('/api/users', authMiddleware, requireAdmin, async (req, res) => {
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute(
+    const [rows] = await dbPool.execute(
       'SELECT id, email, username, role, created_at FROM users ORDER BY id'
     );
-    await conn.end();
     res.json(rows);
   } catch (err) {
     console.error('유저 목록 조회 오류:', err);
@@ -351,9 +394,7 @@ app.patch('/api/users/:id', authMiddleware, requireAdmin, async (req, res) => {
     return res.status(400).json({ error: '권한은 1~4 사이의 숫자여야 합니다.' });
   }
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    const [result] = await conn.execute('UPDATE users SET role = ? WHERE id = ?', [r, userId]);
-    await conn.end();
+    const [result] = await dbPool.execute('UPDATE users SET role = ? WHERE id = ?', [r, userId]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: '해당 유저를 찾을 수 없습니다.' });
     }
@@ -364,4 +405,102 @@ app.patch('/api/users/:id', authMiddleware, requireAdmin, async (req, res) => {
   }
 });
 
-app.listen(4000, () => console.log('API Server running on port 4000'));
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws/livechat' });
+
+wss.on('connection', async (ws, req) => {
+  let channelOwner = '';
+
+  try {
+    const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    channelOwner = requestUrl.searchParams.get('channelOwner') || '';
+    const token = requestUrl.searchParams.get('token');
+
+    if (!channelOwner) {
+      ws.send(JSON.stringify({ type: 'error', error: 'channelOwner is required' }));
+      ws.close();
+      return;
+    }
+
+    ws.channelOwner = channelOwner;
+    ws.user = decodeWsUser(token);
+    getChannelClients(channelOwner).add(ws);
+
+    const [historyRows] = await dbPool.execute(
+      'SELECT username, message, created_at FROM chats WHERE channel_owner = ? ORDER BY created_at DESC LIMIT 30',
+      [channelOwner]
+    );
+
+    ws.send(JSON.stringify({
+      type: 'history',
+      messages: historyRows.reverse(),
+    }));
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'error', error: '채팅 연결 초기화 실패' }));
+    ws.close();
+    return;
+  }
+
+  ws.on('message', async (rawData) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(rawData.toString());
+    } catch (err) {
+      ws.send(JSON.stringify({ type: 'error', error: '잘못된 메시지 형식입니다.' }));
+      return;
+    }
+
+    if (parsed.type !== 'chat') {
+      return;
+    }
+
+    const text = typeof parsed.message === 'string' ? parsed.message.trim() : '';
+    if (!text) {
+      ws.send(JSON.stringify({ type: 'error', error: '메시지를 입력해주세요.' }));
+      return;
+    }
+
+    if (!ws.user) {
+      ws.send(JSON.stringify({ type: 'error', error: '로그인이 필요합니다.' }));
+      return;
+    }
+
+    try {
+      const [userRows] = await dbPool.execute('SELECT username FROM users WHERE id = ?', [ws.user.id]);
+      if (userRows.length === 0) {
+        ws.send(JSON.stringify({ type: 'error', error: '유저를 찾을 수 없습니다.' }));
+        return;
+      }
+
+      const chatMessage = {
+        username: userRows[0].username,
+        message: text,
+        created_at: new Date().toISOString(),
+      };
+
+      await dbPool.execute(
+        'INSERT INTO chats (username, channel_owner, message) VALUES (?, ?, ?)',
+        [chatMessage.username, ws.channelOwner, chatMessage.message]
+      );
+
+      broadcastToChannel(ws.channelOwner, {
+        type: 'chat',
+        message: chatMessage,
+      });
+    } catch (err) {
+      ws.send(JSON.stringify({ type: 'error', error: '채팅 전송 실패' }));
+    }
+  });
+
+  ws.on('close', () => {
+    if (!channelOwner) return;
+    const clients = wsChannels.get(channelOwner);
+    if (!clients) return;
+    clients.delete(ws);
+    if (clients.size === 0) {
+      wsChannels.delete(channelOwner);
+    }
+  });
+});
+
+server.listen(4000, () => console.log('API Server running on port 4000'));
