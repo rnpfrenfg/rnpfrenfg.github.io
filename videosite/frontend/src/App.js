@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Link, useParams, NavLink, Outlet } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useParams, NavLink, Outlet, useOutletContext } from 'react-router-dom';
 import './App.css';
 import { useAuth } from './context/AuthContext';
 import { api } from './api';
@@ -23,6 +23,7 @@ function App() {
               <>
                 <span className="nav-user">{user.username}</span>
                 {isAdmin && <Link to="/admin" className="nav-link">관리자</Link>}
+                <Link to="/studio" className="nav-link">스튜디오로</Link>
                 <button type="button" onClick={logout} className="nav-btn">로그아웃</button>
               </>
             ) : (
@@ -46,8 +47,9 @@ function App() {
               <Route path="/live/:id" element={<ViewLive />} />
               <Route path="/video/:id" element={<ViewVideo />} />
               <Route path="*" element={<ErrorPage />} />
+              <Route path="/studio" element={<Studio />} />
 
-              <Route path="/channel/:channelname" element={<ChannelLayout />}>
+              <Route path="/channel/:channelid" element={<ChannelLayout />}>
                 <Route index element={<ChannelHome />} />
                 <Route path="videos" element={<ChannelVideos />} />
                 <Route path="community" element={<ChannelCommunity />} />
@@ -68,13 +70,14 @@ function MainPage() {
   const [streamKey, setStreamKey] = useState('');
   const [streamKeyMessage, setStreamKeyMessage] = useState({ type: '', text: '' });
   const [streamKeyLoading, setStreamKeyLoading] = useState(false);
-  const [liveList, setLiveList] = useState([]);
+
+  const [section, setSection] = useState([]);
 
   useEffect(() => {
     if (!user) return;
     (async () => {
       try {
-        const { data } = await api.get('/api/me/stream-key');
+        const { data } = await api.post('/api/me/streamkey');
         setStreamKey(data.stream_key || '');
       } catch {
         setStreamKey('');
@@ -83,18 +86,15 @@ function MainPage() {
   }, [user]);
 
   useEffect(() => {
-    let t;
-    const fetchLive = async () => {
+    const fetchData = async () => {
       try {
-        const { data } = await api.get('/api/live');
-        setLiveList(Array.isArray(data) ? data : []);
-      } catch {
-        setLiveList([]);
+        const { data } = await api.get('/api/mainpage');
+        setSection(Array.isArray(data) ? data : []);
+      } catch (err) {
+        setSection([]);
       }
     };
-    fetchLive();
-    t = setInterval(fetchLive, 5000);
-    return () => clearInterval(t);
+    fetchData();
   }, []);
 
   const handleRegenerateStreamKey = async () => {
@@ -111,11 +111,6 @@ function MainPage() {
       setStreamKeyLoading(false);
     }
   };
-
-  const videoList = [
-    { id: '101', title: '리액트 기초 강의' },
-    { id: '102', title: '자바스크립트 마스터' }
-  ];
 
   return (
     <div>
@@ -145,104 +140,146 @@ function MainPage() {
         </div>
       )}
 
-      {liveList.length > 0 && (
-        <div className="live-list">
-          <h4>지금 라이브</h4>
-          {liveList.map((u) => (
-            <div key={u.username} className="live-item">
-              <span className="live-username">{u.username}</span>
-              <Link to={`/live/${u.username}`}>시청하기</Link>
+      <div className="content-grid">
+        {section && section.map((section, idx) => (
+          <div key={idx} className="section-container">
+              <h3>{section.title}</h3>
+              <div className="item-list">
+                {section.list && section.list.map((item, i) => (
+                  <div key={i} className="item-card">
+                    <Link to={item.link}>
+                      {item.title}
+                    </Link>
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
-        </div>
-      )}
-
-      <h4 style={{ marginTop: 24 }}>추천 영상</h4>
-      {videoList.map(video => (
-        <div key={video.id} style={{ border: '1px solid #ccc', margin: '10px', padding: '10px' }}>
-          <h4>{video.title}</h4>
-          <Link to={`/video/${video.id}`}>시청하기</Link>
-        </div>
-      ))}
+          ))
+        }
+      </div>
     </div>
   );
 }
 
 function ViewLive() {
-  const { id: username } = useParams();
+  const { id: channelid } = useParams();
 
-  const videoRef = VideoStream(username);
+  const videoRef = VideoStream(channelid);
   if(videoRef === null)
     return <div className="error"> <Link to="/">돌아가기</Link></div>;
 
-  console.log(videoRef);
   return (
     <div className="video-page-layout" style={{ display: 'flex', height: 'calc(100vh - 60px)' }}>
       <div className="video-player-container" style={{ flex: 1, padding: '20px' }}>
         <div className="player-wrapper" style={{ position: 'relative', backgroundColor: '#000' }}>
-          <video ref={videoRef} controls autoPlay muted style={{ width: '100%', aspectRatio: '16/9' }} />
+          <video ref={videoRef} controls autoPlay style={{ width: '100%', aspectRatio: '16/9' }} />
         </div>
-        <h3>{username} 님의 라이브 <Link to={`/channel/${username}`}>채널로 이동</Link></h3>
+        <h3>{channelid} 님의 라이브 <Link to={`/channel/${channelid}`}>채널로 이동</Link></h3>
       </div>
-      <Chat channelOwner={username} />
+      <Chat channelid={channelid} />
     </div>
   );
 }
 
 function ChannelLayout() {
-  const { channelname } = useParams();
+  const { channelid } = useParams();
+  const [channelInfo, setChannelInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await api.get(`/api/channel/info/${channelid}`);
+        setChannelInfo(data);
+      } catch (err) {
+        console.error("채널 정보 로드 실패", err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [channelid]);
+  
+  if (loading) return <div>채널 정보 로딩 중...</div>;
 
   return (
     <div className="channel-wrapper">
       <div className="channel-header">
-        <h2>{channelname} 채널</h2>
+        <h2>{channelInfo.username}</h2>
         <nav className="channel-tabs">
-          <NavLink to={`/channel/${channelname}`} end>홈</NavLink>
-          <NavLink to={`/channel/${channelname}/videos`}>동영상</NavLink>
-          <NavLink to={`/channel/${channelname}/community`}>커뮤니티</NavLink>
-          <NavLink to={`/channel/${channelname}/about`}>정보</NavLink>
+          <NavLink to={`/channel/${channelid}`} end>홈</NavLink>
+          <NavLink to={`/channel/${channelid}/videos`}>동영상</NavLink>
+          <NavLink to={`/channel/${channelid}/community`}>커뮤니티</NavLink>
+          <NavLink to={`/channel/${channelid}/about`}>정보</NavLink>
         </nav>
       </div>
       <hr />
       
       <div className="channel-content">
-        <Outlet context={{ channelname }} />
+        <Outlet context={{ channelid, channelInfo}} />
       </div>
     </div>
   );
 }
 
 function ChannelHome() {
-  return <div>채널의 홈입니다.</div>;
+  const { channelid, channelInfo } = useOutletContext();
+
+
+
+  return (
+    <div className="channel-home-container">
+      {channelInfo.is_live === 1 ? (
+        <div>
+          <Link to={`/live/${channelid}`}>
+            라이브 시청하기
+          </Link>
+        </div>
+      ) : (
+        <div className="offline-status">
+          <p>현재는 방송 중이 아닙니다. 이전에 업로드된 영상을 확인해 보세요!</p>
+        </div>
+      )}
+      <div style={{ marginTop: '20px' }}>
+        <p>다시보기,클립,등등등등</p>
+      </div>
+    </div>
+  );
 }
 
 function ChannelVideos() {
-  const { channelname } = useParams();
-  const [videos, setVideos] = useState([]);
+  const { channelid } = useParams();
+  const [ videoData, setVideoData] = useState([]);
   const [page, setPage] = useState(1);
 
   useEffect(() => {
-    const fetchVideos = async () => {
+    (async () => {
       try {
-        const { data } = await api.get(`/api/channel/videos?channelname=${channelname}&page=${page}`);
-        setVideos(data.videos);
+        const { data } = await api.get(`/api/channel/videos?channelid=${channelid}&page=${page}`);
+        setVideoData(data);
       } catch (err) {
         console.error("비디오 로드 실패", err);
       }
-    };
-    fetchVideos();
-  }, [channelname, page]);
+    })();
+  }, [channelid, page]);
+  console.log(videoData);
 
   return (
     <div className="video-grid">
-      {videos.map(video => (
+      {videoData.videos?(videoData.videos.map(video => (
         <div key={video.id} className="video-card">
           <Link to={`/video/${video.id}`}>
             <h4>{video.title}</h4>
             <p>{new Date(video.created_at).toLocaleDateString()}</p>
           </Link>
         </div>
-      ))}
+      ))):[]}
+      <div className="pagination">
+        {Array.from({ length: videoData.totalPages }, (_, i) => (
+          <Link key={i} to={`/${channelid}/${i+1}`}>
+            {i+1}
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }
@@ -252,7 +289,15 @@ function ChannelCommunity() {
 }
 
 function ChannelAbout() {
-  return <div>채널 설명 및 정보 페이지입니다.</div>;
+  const { channelInfo } = useOutletContext();
+
+  return (
+    <div className="about-section">
+      <h3>채널 정보</h3>
+      <p><strong>채널 이름:</strong> {channelInfo.channelname}</p>
+      <p><strong>가입일:</strong> {new Date(channelInfo.created_at).toLocaleDateString()}</p>
+    </div>
+  );
 }
 
 function ViewVideo() {
@@ -265,7 +310,6 @@ function ViewVideo() {
       try {
         const { data } = await api.get(`/api/video/info?id=${id}`);
         setVideoInfo(data);
-        console.log(data.url);
       } catch (err) {
         console.error(err);
       } finally {
@@ -285,16 +329,19 @@ function ViewVideo() {
             src={videoInfo.url} 
             controls 
             autoPlay 
-            muted
             style={{ width: '100%', height: '100%' }} 
           />
         </div>
         <h3>{videoInfo.title}</h3>
-        <p>채널: <Link to={`/channel/${videoInfo.channel_name}`}>{videoInfo.channel_name}</Link></p>
+        <p>채널: <Link to={`/channel/${videoInfo.channelid}`}>{videoInfo.channelid}</Link></p>
         <p>업로드 일자: {new Date(videoInfo.created_at).toLocaleString()}</p>
       </div>
     </div>
   );
+}
+
+function Studio(){
+  return <div></div>;
 }
 
 function ErrorPage(){

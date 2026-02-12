@@ -11,7 +11,13 @@ require('dotenv').config();
 const { exec } = require('child_process');
 const path = require('path');
 
-const NGINX_SERVER = 'http://localhost:8080';
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('\x1b[31m%s\x1b[0m', '[UnHandled Rejection] ', err);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('\x1b[31m%s\x1b[0m', '[Uncaught Exception] ', err);
+});
 
 const directories = ['./media', './mediaend'];
 directories.forEach(dir => {
@@ -21,9 +27,25 @@ directories.forEach(dir => {
     }
 });
 
+function generateStreamKey(userId) {
+  return `user_${userId}_${Date.now()}`;
+}
+
 async function startServer(){
   await initDB();
+
+  try{
+    dbPool.execute('UPDATE livesetting SET is_live = 0 WHERE is_live = 1')
+  }
+  catch(err){
+    console.log('db cleare err');
+  }
 }
+
+const NGINX_SERVER = 'http://localhost:8080';
+
+const liveSessions = new Map();
+const wsChannels = new Map();
 
 startServer();
 
@@ -32,17 +54,31 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const wsChannels = new Map();
+const debug = false;
 
-function getChannelClients(channelOwner) {
-  if (!wsChannels.has(channelOwner)) {
-    wsChannels.set(channelOwner, new Set());
-  }
-  return wsChannels.get(channelOwner);
+if(debug){
+  app.use((req, res, next) => {
+    const start = Date.now();
+    const { method, url, body } = req;
+
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        console.log(`[API] [${new Date().toISOString()}] ${method} ${url} ${res.statusCode} - ${duration}ms`);
+    });
+
+    next();
+  });
 }
 
-function broadcastToChannel(channelOwner, payload) {
-  const clients = wsChannels.get(channelOwner);
+function getChannelClients(channelid) {
+  if (!wsChannels.has(channelid)) {
+    wsChannels.set(channelid, new Set());
+  }
+  return wsChannels.get(channelid);
+}
+
+function broadcastToChannel(channelid, payload) {
+  const clients = wsChannels.get(channelid);
   if (!clients) return;
   const serialized = JSON.stringify(payload);
 
@@ -65,18 +101,29 @@ function decodeWsUser(token) {
 
 //from nginx
 app.post('/api/livestartauth', async (req, res) => {
-  const streamKey = req.body.name;
+  try{
+      const streamKey = req.body.name;
 
-  const [user] = await dbPool.execute(
-    'SELECT id FROM users WHERE stream_key = ?', 
-    [streamKey]
-  );
+    const [dbres] = await dbPool.execute('SELECT id, channelname FROM livesetting WHERE stream_key = ?', [streamKey]);
 
-  if (user.length > 0) {
-    await dbPool.execute('UPDATE users SET is_live = 1 WHERE stream_key = ?', [streamKey]);
+    if (dbres.length < 1) {
+      res.status(404).send();
+      return;
+    }
     res.status(200).send();
-  } else {
-    res.status(404).send();
+
+    const channel = dbres[0];
+    const [result] = await dbPool.execute(
+      'INSERT INTO videos (channelid, title) VALUES (?, ?)',
+      [channel.id, `${channel.channelname}님의 방송`]
+    );
+    
+    await dbPool.execute('UPDATE livesetting SET is_live = 1 WHERE stream_key = ?', [streamKey]);
+    const videoId = result.insertId;
+    liveSessions.set(streamKey, {videoId: videoId,startTime: Date.now()});
+  }
+  catch(err){
+    console.error(err);
   }
 });
 
@@ -86,15 +133,15 @@ app.post('/api/livedone', async (req, res) => {
 
   try {
     const [users] = await dbPool.execute(
-        'SELECT id, username FROM users WHERE stream_key = ?', 
+        'SELECT id, channelname FROM livesetting WHERE stream_key = ?', 
         [streamKey]
     );
 
     if (users.length > 0) {
       const user = users[0];
-      await dbPool.execute('UPDATE users SET is_live = 0 WHERE id = ?', [user.id]);
+      await dbPool.execute('UPDATE livesetting SET is_live = 0 WHERE id = ?', [user.id]);
 
-      broadcastToChannel(user.username, { type: 'chat', message: '방송이 종료되었습니다.' });
+      broadcastToChannel(user.id, { type: 'chat', message: '방송이 종료되었습니다.' });
     }
     res.status(200).send();
   } catch (err) {
@@ -105,61 +152,79 @@ app.post('/api/livedone', async (req, res) => {
 
 //from nginx
 app.post('/api/recorddone', async (req, res) => {
-    const streamKey = req.body.name;
-    const flvPath = req.body.path;
+  const streamKey = req.body.name;
+  const flvPath = req.body.path;
+  
+  if (!flvPath) return res.status(400).send('No path');
+
+  const mp4Path = flvPath.replace('.flv', '.mp4');
+  const filename = path.basename(mp4Path);
+
+  res.send('Started');
+
+  exec(`ffmpeg -y -i "${flvPath}" -c copy "${mp4Path}"`, async (error) => {
+    if (error) return console.error("FFmpeg error:", error);
+
+    try {
+      const [users] = await dbPool.execute('SELECT id, channelname FROM livesetting WHERE stream_key = ?', [streamKey]);
+      if (users.length > 0) {
+        const session = liveSessions.get(streamKey);
+        await dbPool.execute('UPDATE videos SET filename = ? WHERE id = ?', [filename, session.videoId]);
+      }
+      liveSessions.delete(streamKey);
+
+      if (fs.existsSync(flvPath)) fs.unlinkSync(flvPath);
+      
+      const hlsFolder = path.join(__dirname, 'media', streamKey);
+      if (fs.existsSync(hlsFolder)) {
+        fs.rmSync(hlsFolder, { recursive: true, force: true });
+      }
+
+      const hlsFolderPath = path.join(__dirname, 'media', streamKey);
+      if (fs.existsSync(hlsFolderPath)) {
+        fs.rmSync(hlsFolderPath, { recursive: true, force: true });
+        console.log(`[Cleanup] HLS 임시 폴더 삭제 완료: ${hlsFolderPath}`);
+      }
+    } catch (err) {
+        console.error("Post-process error:", err);
+    }
+  });
+});
+
+app.get('/api/channel/info/:channelid', async (req, res) => {
+  const { channelid } = req.params;
+  try {
+    const [rows] = await dbPool.execute(`
+      SELECT u.username, u.created_at, l.channelname, l.is_live
+      FROM users u
+      JOIN livesetting l ON u.id = l.id
+      WHERE u.id = ?`, 
+      [channelid]
+    );
+
+    if (rows.length === 0) return res.status(404).json({ error: '채널을 찾을 수 없습니다.' });
     
-    if (!flvPath) return res.status(400).send('No path');
-
-    const mp4Path = flvPath.replace('.flv', '.mp4');
-    const filename = path.basename(mp4Path);
-
-    res.status(200).send('Started');
-
-    exec(`ffmpeg -y -i "${flvPath}" -c copy "${mp4Path}"`, async (error) => {
-        if (error) return console.error("FFmpeg error:", error);
-
-        try {
-            const [users] = await dbPool.execute('SELECT id, username FROM users WHERE stream_key = ?', [streamKey]);
-            if (users.length > 0) {
-                await dbPool.execute(
-                    'INSERT INTO videos (user_id, channel_name, title, filename) VALUES (?, ?, ?, ?)',
-                    [users[0].id, users[0].username, `${users[0].username}님의 다시보기`, filename]
-                );
-            }
-
-            if (fs.existsSync(flvPath)) fs.unlinkSync(flvPath);
-            
-            const hlsFolder = path.join(__dirname, 'media', streamKey);
-            if (fs.existsSync(hlsFolder)) {
-                fs.rmSync(hlsFolder, { recursive: true, force: true });
-            }
-
-            const hlsFolderPath = path.join(__dirname, 'media', streamKey);
-            if (fs.existsSync(hlsFolderPath)) {
-                fs.rmSync(hlsFolderPath, { recursive: true, force: true });
-                console.log(`[Cleanup] HLS 임시 폴더 삭제 완료: ${hlsFolderPath}`);
-            }
-        } catch (err) {
-            console.error("Post-process error:", err);
-        }
-    });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: '서버 오류' });
+  }
 });
 
 app.get('/api/channel/videos', async (req, res) => {
-    const channelname = req.query.channelname;
+    const channelid = req.query.channelid;
     const page = parseInt(req.query.page) || 1; 
     const limit = 10; 
     const offset = (page - 1) * limit;
 
     try {
         const [videos] = await dbPool.query(
-            'SELECT id, title, created_at FROM videos WHERE channel_name = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
-            [channelname, limit, offset]
+            'SELECT id, title, created_at FROM videos WHERE channelid = ? AND filename IS NOT NULL ORDER BY created_at DESC LIMIT ? OFFSET ?',
+            [channelid, limit, offset]
         );
 
         const [totalCount] = await dbPool.query(
-            'SELECT COUNT(*) as count FROM videos WHERE channel_name = ?',
-            [channelname]
+            'SELECT COUNT(*) as count FROM videos WHERE channelid = ?',
+            [channelid]
         );
 
         res.json({
@@ -169,6 +234,7 @@ app.get('/api/channel/videos', async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ error: '비디오 목록을 불러오지 못했습니다.' });
+        console.log(err);
     }
 });
 
@@ -193,30 +259,51 @@ app.get('/api/video/info', async (req, res) => {
 });
 
 //from nginx, url(username/filename) to streamkey/filename
-app.get('/api/proxy/:username/:filename', async (req, res) => {
-    const { username, filename } = req.params;
-    try {
-        const [rows] = await dbPool.execute('SELECT stream_key FROM users WHERE username = ?', [username]);
+app.get('/api/proxy/:channelid/:filename', async (req, res) => {
+  const { channelid, filename } = req.params;
+  try {
+    const [rows] = await dbPool.execute('SELECT stream_key FROM livesetting WHERE id = ?', [channelid]);
 
-        if (rows.length === 0) return res.status(404).send('User not found');
-        
-        const streamKey = rows[0].stream_key;
+    if (rows.length === 0) return res.status(404).send('User not found');
+    
+    const streamKey = rows[0].stream_key;
 
-        const internalPath = `/internal_hls/${streamKey}/${filename}`;
-        
-        res.setHeader('X-Accel-Redirect', internalPath);
-        res.end(); 
-    } catch (err) {
-        res.status(500).send('Proxy Error');
-    }
+    const internalPath = `/internal_hls/${streamKey}/${filename}`;
+    
+    res.setHeader('X-Accel-Redirect', internalPath);
+    res.end(); 
+  } catch (err) {
+    res.status(500).send('Proxy Error');
+    console.error(err);
+  }
 });
 
-app.get('/api/live', async (req, res) => {
+app.get('/api/mainpage', async (req, res) => {
   try {
-    const [rows] = await dbPool.execute(
-      'SELECT id, username FROM users WHERE is_live = 1 AND stream_key IS NOT NULL'
+    const [lives] = await dbPool.execute(
+      'SELECT id, channelname FROM livesetting WHERE is_live = 1 LIMIT 16'
     );
-    res.json(rows);
+    const [videos] = await dbPool.execute(
+      'SELECT id, title, channelid FROM videos WHERE filename IS NOT NULL ORDER BY created_at LIMIT 16'
+    );
+    res.status(200).json([
+      {
+        title: "지금 라이브 중!",
+        list: lives.map(l => ({
+          title: l.channelname,
+          channelid: l.channelname,
+          link: `/live/${l.id}`
+        }))
+      },
+      {
+        title: "인기 비디오",
+        list: videos.map(v => ({
+          title: v.title,
+          channelid: v.channelid,
+          link: `/video/${v.id}`
+        }))
+      }
+    ]);
   } catch (err) {
     console.error('라이브 목록 조회 오류:', err);
     res.status(500).json({ error: '라이브 목록을 불러오지 못했습니다.' });
@@ -224,25 +311,11 @@ app.get('/api/live', async (req, res) => {
 });
 
 app.get('/api/liveurl', async (req, res) => {
-  res.status(201).send({url:`${NGINX_SERVER}/live/${req.query.channel}/index.m3u8`})
+  res.status(201).send({url:`${NGINX_SERVER}/live/${req.query.channelid}/index.m3u8`})
 });
 
-app.get('/api/livechat/:username', async (req, res) => {
-  const channelOwner = req.params.username;
-  try {
-    const [rows] = await dbPool.execute(
-      'SELECT username, message, created_at FROM chats WHERE channel_owner = ? ORDER BY created_at DESC LIMIT 30',
-      [channelOwner]
-    );
-    res.json(rows.reverse());
-  } catch (err) {
-    res.status(500).json({ error: '채팅을 불러오지 못했습니다.' });
-    console.log(err);
-  }
-});
-
-app.post('/api/livechat/:username', authMiddleware, async (req, res) => {
-  const channelOwner = req.params.username;
+app.post('/api/livechat/:channelid', authMiddleware, async (req, res) => {
+  const channelid = req.params.channelid;
   const message = (req.body.message || '').trim();
 
   if (!message) {
@@ -257,8 +330,8 @@ app.post('/api/livechat/:username', authMiddleware, async (req, res) => {
     const senderName = userRows[0].username;
 
     await dbPool.execute(
-      'INSERT INTO chats (username, channel_owner, message) VALUES (?, ?, ?)',
-      [senderName, channelOwner, message]
+      'INSERT INTO chats (username, channelid, message) VALUES (?, ?, ?)',
+      [senderName, channelid, message]
     );
 
     const chatMessage = {
@@ -267,7 +340,7 @@ app.post('/api/livechat/:username', authMiddleware, async (req, res) => {
       created_at: new Date().toISOString(),
     };
 
-    broadcastToChannel(channelOwner, {
+    broadcastToChannel(channelid, {
       type: 'chat',
       message: chatMessage,
     });
@@ -275,7 +348,7 @@ app.post('/api/livechat/:username', authMiddleware, async (req, res) => {
     res.status(201).json({ success: true, message: chatMessage });
   } catch (err) {
     res.status(500).json({ error: '채팅 전송 실패' });
-    console.log(err);
+    console.error(err);
   }
 });
 
@@ -328,44 +401,57 @@ app.post('/api/signup', async (req, res) => {
     );
     const userId = result.insertId;
     const stream_key = generateStreamKey(userId);
-    await dbPool.execute('UPDATE users SET stream_key = ? WHERE id = ?', [stream_key, userId]);
+    await dbPool.execute('INSERT INTO livesetting (id, channelname, stream_key) VALUES (?, ?, ?)', [userId, username.trim(), stream_key]);
     res.status(201).json({ message: '회원가입이 완료되었습니다.' });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: '이미 사용 중인 이메일입니다.' });
     }
-    console.error('회원가입 오류:', err);
+    console.log('회원가입 오류:', err);
     res.status(500).json({ error: '회원가입 처리 중 오류가 발생했습니다.' });
   }
 });
 
-app.get('/api/me/stream-key', authMiddleware, async (req, res) => {
+async function regenerateStreamKey(channelid){
   try {
+    //TODO 방송중이면 방어
+    const stream_key = generateStreamKey(channelid);
+    await dbPool.execute('UPDATE livesetting SET stream_key = ? WHERE id = ?', [stream_key, channelid]);
+    return stream_key;
+  } catch (err) {
+    return null;
+  }
+}
+
+app.post('/api/me/streamkey', authMiddleware, async (req, res) => {
+  try {
+      console.log(req.user.id);
     let [rows] = await dbPool.execute(
-      'SELECT stream_key FROM users WHERE id = ?',
+      'SELECT stream_key FROM livesetting WHERE id = ?',
       [req.user.id]
     );
     if (rows.length === 0) {
+      console.log(req.user.id);
       return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
     }
     let stream_key = rows[0].stream_key;
     if (!stream_key) {
-      stream_key = generateStreamKey(req.user.id);
-      await dbPool.execute('UPDATE users SET stream_key = ? WHERE id = ?', [stream_key, req.user.id]);
+      stream_key = await regenerateStreamKey(channelid);
     }
     res.json({ stream_key });
   } catch (err) {
-    console.error('스트림 키 조회 오류:', err);
+    console.log('스트림 키 조회 오류:', err);
     res.status(500).json({ error: '스트림 키를 불러오지 못했습니다.' });
   }
 });
 
 app.post('/api/me/stream-key/regenerate', authMiddleware, async (req, res) => {
-  try {
-    const stream_key = generateStreamKey(req.user.id);
-    await dbPool.execute('UPDATE users SET stream_key = ? WHERE id = ?', [stream_key, req.user.id]);
+  const channelid = req.user.id;
+  const stream_key = await regenerateStreamKey(channelid);
+  if(stream_key !== null){
     res.json({ message: '새 스트림 키가 발급되었습니다.', stream_key });
-  } catch (err) {
+  }
+  else{
     console.error('스트림 키 재발급 오류:', err);
     res.status(500).json({ error: '스트림 키 재발급에 실패했습니다.' });
   }
@@ -409,32 +495,28 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws/livechat' });
 
 wss.on('connection', async (ws, req) => {
-  let channelOwner = '';
+  let channelid = '';
 
   try {
     const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    channelOwner = requestUrl.searchParams.get('channelOwner') || '';
+    channelid = requestUrl.searchParams.get('channelid') || '';
     const token = requestUrl.searchParams.get('token');
 
-    if (!channelOwner) {
-      ws.send(JSON.stringify({ type: 'error', error: 'channelOwner is required' }));
+    if (!channelid) {
+      ws.send(JSON.stringify({ type: 'error', error: 'channelid is required' }));
       ws.close();
       return;
     }
 
-    ws.channelOwner = channelOwner;
+    ws.channelid = channelid;
     ws.user = decodeWsUser(token);
-    getChannelClients(channelOwner).add(ws);
-
-    const [historyRows] = await dbPool.execute(
-      'SELECT username, message, created_at FROM chats WHERE channel_owner = ? ORDER BY created_at DESC LIMIT 30',
-      [channelOwner]
-    );
-
-    ws.send(JSON.stringify({
-      type: 'history',
-      messages: historyRows.reverse(),
-    }));
+    const [userRows] = await dbPool.execute('SELECT username FROM users WHERE id = ?', [ws.user.id]);
+    if (userRows.length === 0) {
+      ws.send(JSON.stringify({ type: 'error', error: '유저를 찾을 수 없습니다.' }));
+      return;
+    }
+    ws.user.username= userRows[0].username
+    getChannelClients(channelid).add(ws);
   } catch (err) {
     ws.send(JSON.stringify({ type: 'error', error: '채팅 연결 초기화 실패' }));
     ws.close();
@@ -472,33 +554,39 @@ wss.on('connection', async (ws, req) => {
         return;
       }
 
+      const [rows] = await dbPool.execute('SELECT stream_key FROM livesetting WHERE id = ?', [ws.user.id]);
+      if (rows.length === 0) return res.status(404).send('User not found');
+      const streamKey = rows[0].stream_key;
+
+      const session = liveSessions.get(streamKey);
+      console.log(session, [session.videoId, ws.user.id, ws.user, text]);
+      await dbPool.execute(
+        'INSERT INTO chats (video_id, channelid, username, message) VALUES (?, ?, ?, ?)',
+        [session.videoId, ws.user.id, ws.user.username, text]
+      );
+
       const chatMessage = {
         username: userRows[0].username,
         message: text,
         created_at: new Date().toISOString(),
       };
-
-      await dbPool.execute(
-        'INSERT INTO chats (username, channel_owner, message) VALUES (?, ?, ?)',
-        [chatMessage.username, ws.channelOwner, chatMessage.message]
-      );
-
-      broadcastToChannel(ws.channelOwner, {
+      broadcastToChannel(ws.channelid, {
         type: 'chat',
         message: chatMessage,
       });
     } catch (err) {
       ws.send(JSON.stringify({ type: 'error', error: '채팅 전송 실패' }));
+      console.log('채팅 전송 에러', err);
     }
   });
 
   ws.on('close', () => {
-    if (!channelOwner) return;
-    const clients = wsChannels.get(channelOwner);
+    if (!channelid) return;
+    const clients = wsChannels.get(channelid);
     if (!clients) return;
     clients.delete(ws);
     if (clients.size === 0) {
-      wsChannels.delete(channelOwner);
+      wsChannels.delete(channelid);
     }
   });
 });

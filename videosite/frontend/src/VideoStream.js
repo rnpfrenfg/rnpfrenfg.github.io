@@ -2,21 +2,20 @@ import Hls from 'hls.js';
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 
-function VideoStream(channelname){
+function VideoStream(channelid){
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
     const [error, setError] = useState('');
 
     useEffect(() => {
-        // 1. 내부에서 비동기 함수 정의
         const initHls = async () => {
-            if (!channelname || !videoRef.current) return;
+            if (!channelid || !videoRef.current) return;
 
             const video = videoRef.current;
             let hlsUrl = '';
 
             try {
-                const { data } = await api.get(`/api/liveurl?channel=${channelname}`);
+                const { data } = await api.get(`/api/liveurl?channelid=${channelid}`);
                 hlsUrl = data.url;
             } catch (err) {
                 console.error("URL 로드 실패:", err);
@@ -65,17 +64,15 @@ function VideoStream(channelname){
             });
         };
 
-        // 2. 정의한 함수 실행
         initHls();
 
-        // 3. 클린업 함수 (중요!)
         return () => {
             if (hlsRef.current) {
                 hlsRef.current.destroy();
                 hlsRef.current = null;
             }
         };
-    }, [channelname]); // channelname이 바뀔 때마다 재실행
+    }, [channelid]);
     
     if (error !== ''){
         console.log(error);

@@ -2,18 +2,18 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from './api';
 import { useAuth } from './context/AuthContext';
 
-function buildWsUrl(baseHttpUrl, channelOwner, token) {
+function buildWsUrl(baseHttpUrl, channelid, token) {
   const httpUrl = new URL(baseHttpUrl || window.location.origin);
   const wsProtocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = new URL('/ws/livechat', `${wsProtocol}//${httpUrl.host}`);
-  wsUrl.searchParams.set('channelOwner', channelOwner);
+  wsUrl.searchParams.set('channelid', channelid);
   if (token) {
     wsUrl.searchParams.set('token', token);
   }
   return wsUrl.toString();
 }
 
-function Chat({ channelOwner }) {
+function Chat({ channelid }) {
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
@@ -21,19 +21,18 @@ function Chat({ channelOwner }) {
   const chatEndRef = useRef(null);
 
   useEffect(() => {
-    if (!channelOwner) return;
+    if (!channelid) return;
 
     const token = localStorage.getItem('token');
-    const wsUrl = buildWsUrl(api.defaults.baseURL, channelOwner, token);
+    const wsUrl = buildWsUrl(api.defaults.baseURL, channelid, token);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'history') {
-          setMessages(Array.isArray(data.messages) ? data.messages : []);
-        } else if (data.type === 'chat' && data.message) {
+        console.log(data.type);
+        if (data.type === 'chat' && data.message) {
           setMessages((prev) => [...prev, data.message]);
         } else if (data.type === 'error' && data.error) {
           console.error(data.error);
@@ -55,7 +54,7 @@ function Chat({ channelOwner }) {
         wsRef.current = null;
       }
     };
-  }, [channelOwner]);
+  }, [channelid]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
