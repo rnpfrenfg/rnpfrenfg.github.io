@@ -12,7 +12,7 @@ const { exec } = require('child_process');
 const path = require('path');
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('\x1b[31m%s\x1b[0m', '[UnHandled Rejection] ', err);
+    console.error('\x1b[31m%s\x1b[0m', '[UnHandled Rejection] ', reason);
 });
 
 process.on('uncaughtException', (err) => {
@@ -54,7 +54,24 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const debug = false;
+app.get('/static/js/admin.js', (req, res, next) => {
+  const token = req.headers.authorization;
+  
+  if (!token) return res.status(403).send('Access Denied');
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role >= 2) {
+      next();
+    } else {
+      res.status(403).send('Forbidden');
+    }
+  } catch (err) {
+    res.status(403).send('Invalid Token');
+  }
+});
+
+const debug = true;
 
 if(debug){
   app.use((req, res, next) => {
@@ -314,44 +331,6 @@ app.get('/api/liveurl', async (req, res) => {
   res.status(201).send({url:`${NGINX_SERVER}/live/${req.query.channelid}/index.m3u8`})
 });
 
-app.post('/api/livechat/:channelid', authMiddleware, async (req, res) => {
-  const channelid = req.params.channelid;
-  const message = (req.body.message || '').trim();
-
-  if (!message) {
-    return res.status(400).json({ error: '메시지를 입력해주세요.' });
-  }
-  
-  try {
-    const [userRows] = await dbPool.execute('SELECT username FROM users WHERE id = ?', [req.user.id]);
-    if (userRows.length === 0) {
-      return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
-    }
-    const senderName = userRows[0].username;
-
-    await dbPool.execute(
-      'INSERT INTO chats (username, channelid, message) VALUES (?, ?, ?)',
-      [senderName, channelid, message]
-    );
-
-    const chatMessage = {
-      username: senderName,
-      message,
-      created_at: new Date().toISOString(),
-    };
-
-    broadcastToChannel(channelid, {
-      type: 'chat',
-      message: chatMessage,
-    });
-
-    res.status(201).json({ success: true, message: chatMessage });
-  } catch (err) {
-    res.status(500).json({ error: '채팅 전송 실패' });
-    console.error(err);
-  }
-});
-
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -425,13 +404,13 @@ async function regenerateStreamKey(channelid){
 
 app.post('/api/me/streamkey', authMiddleware, async (req, res) => {
   try {
-      console.log(req.user.id);
+    const channelid = req.user.id; 
+
     let [rows] = await dbPool.execute(
       'SELECT stream_key FROM livesetting WHERE id = ?',
-      [req.user.id]
+      [channelid]
     );
     if (rows.length === 0) {
-      console.log(req.user.id);
       return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
     }
     let stream_key = rows[0].stream_key;
@@ -452,12 +431,12 @@ app.post('/api/me/stream-key/regenerate', authMiddleware, async (req, res) => {
     res.json({ message: '새 스트림 키가 발급되었습니다.', stream_key });
   }
   else{
-    console.error('스트림 키 재발급 오류:', err);
+    console.error('스트림 키 재발급 오류');
     res.status(500).json({ error: '스트림 키 재발급에 실패했습니다.' });
   }
 });
 
-app.get('/api/users', authMiddleware, requireAdmin, async (req, res) => {
+app.post('/api/users', authMiddleware, requireAdmin, async (req, res) => {
   try {
     const [rows] = await dbPool.execute(
       'SELECT id, email, username, role, created_at FROM users ORDER BY id'
@@ -510,6 +489,12 @@ wss.on('connection', async (ws, req) => {
 
     ws.channelid = channelid;
     ws.user = decodeWsUser(token);
+    if(ws.user == null){
+      ws.send(JSON.stringify({ type: 'error', error: 'login plz' }));
+      ws.close();
+      return;
+    }
+
     const [userRows] = await dbPool.execute('SELECT username FROM users WHERE id = ?', [ws.user.id]);
     if (userRows.length === 0) {
       ws.send(JSON.stringify({ type: 'error', error: '유저를 찾을 수 없습니다.' }));
@@ -555,11 +540,18 @@ wss.on('connection', async (ws, req) => {
       }
 
       const [rows] = await dbPool.execute('SELECT stream_key FROM livesetting WHERE id = ?', [ws.user.id]);
-      if (rows.length === 0) return res.status(404).send('User not found');
+      if (rows.length === 0) {
+        ws.send(JSON.stringify({ type: 'error', error: '방송을 찾을 수 없습니다.' }));
+        ws.close();
+        return;
+      }
       const streamKey = rows[0].stream_key;
 
       const session = liveSessions.get(streamKey);
-      console.log(session, [session.videoId, ws.user.id, ws.user, text]);
+      if (!session) {
+        ws.send(JSON.stringify({ type: 'error', error: '로그인이 필요합니다.' }));
+        return;
+      }
       await dbPool.execute(
         'INSERT INTO chats (video_id, channelid, username, message) VALUES (?, ?, ?, ?)',
         [session.videoId, ws.user.id, ws.user.username, text]

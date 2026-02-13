@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
-import { api, MIN_ADMIN_ROLE } from './api';
+import { api } from './api';
 import './Admin.css';
 
-const ROLE_LABELS = { 1: '1 (일반)', 2: '2', 3: '3 (관리자)', 4: '4 (최고관리자)' };
+const ROLE_LABELS = { 1: '1 (권한없음)', 2: '2 (상담)', 3: '3 (권한변경)', 4: '4 (root)' };
 
 function Admin() {
-  const { user, isAdmin } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -16,12 +16,12 @@ function Admin() {
 
   useEffect(() => {
     if (user === null) return;
-    if (!isAdmin) {
+    if (user.role < 2) {
       navigate('/', { replace: true });
       return;
     }
     let cancelled = false;
-    api.get('/api/users')
+    api.post('/api/users')
       .then(({ data }) => { if (!cancelled) setUsers(data); })
       .catch((err) => {
         if (!cancelled) {
@@ -31,7 +31,7 @@ function Admin() {
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [user, isAdmin, navigate]);
+  }, [user, navigate]);
 
   const handleRoleChange = async (userId, newRole) => {
     const r = Number(newRole);
@@ -52,7 +52,7 @@ function Admin() {
   };
 
   if (user === null) return null;
-  if (!isAdmin) return null;
+  if (user.role<2) return null;
 
   return (
     <div className="admin-page">

@@ -92,7 +92,6 @@ function Chat({ channelid }) {
         {user ? (
           <div style={{ display: 'flex' }}>
             <input
-              style={{ flex: 1, padding: '5px' }}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               placeholder="채팅을 입력하세요.."

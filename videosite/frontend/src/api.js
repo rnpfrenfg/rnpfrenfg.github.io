@@ -28,5 +28,3 @@ export function clearAuth() {
   localStorage.removeItem('user');
   localStorage.removeItem('token');
 }
-
-export const MIN_ADMIN_ROLE = 3;

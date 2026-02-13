@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { getStoredUser, setAuth as saveAuth, clearAuth, MIN_ADMIN_ROLE } from '../api';
+import { getStoredUser, setAuth as saveAuth, clearAuth } from '../api';
 
 const AuthContext = createContext(null);
 
@@ -20,10 +20,8 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
-  const isAdmin = user && user.role >= MIN_ADMIN_ROLE;
-
   return (
-    <AuthContext.Provider value={{ user, login, logout, isAdmin }}>
+    <AuthContext.Provider value={{ user, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

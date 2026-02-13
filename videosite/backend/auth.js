@@ -1,6 +1,5 @@
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-const MIN_ADMIN_ROLE = 3;
 
 function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -17,11 +16,4 @@ function authMiddleware(req, res, next) {
   }
 }
 
-function requireAdmin(req, res, next) {
-  if (!req.user || req.user.role < MIN_ADMIN_ROLE) {
-    return res.status(403).json({ error: '관리자 권한이 필요합니다.' });
-  }
-  next();
-}
-
-module.exports = { authMiddleware, requireAdmin, JWT_SECRET };
+module.exports = { authMiddleware, JWT_SECRET };

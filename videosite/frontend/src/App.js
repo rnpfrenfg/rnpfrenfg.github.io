@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Link, useParams, NavLink, Outlet, useOutletContext } from 'react-router-dom';
 import './App.css';
 import { useAuth } from './context/AuthContext';
@@ -8,10 +8,10 @@ import Chat from './Chat';
 import VideoStream from './VideoStream';
 import Signup from './Signup';
 import Login from './Login';
-import Admin from './Admin';
+const Admin = React.lazy(() => import('./Admin'));
 
 function App() {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout } = useAuth();
 
   return (
     <BrowserRouter>
@@ -22,7 +22,7 @@ function App() {
             {user ? (
               <>
                 <span className="nav-user">{user.username}</span>
-                {isAdmin && <Link to="/admin" className="nav-link">관리자</Link>}
+                {user.role > 1 && <Link to="/admin" className="nav-link">관리자</Link>}
                 <Link to="/studio" className="nav-link">스튜디오로</Link>
                 <button type="button" onClick={logout} className="nav-btn">로그아웃</button>
               </>
@@ -37,17 +37,17 @@ function App() {
 
         <div className="main-layout">
           <div className="left-bar">팔로잉 채널 목록</div>
-
           <div className="main-container">
             <Routes>
               <Route path="/" element={<MainPage />} />
               <Route path="/login" element={<Login />} />
               <Route path="/signup" element={<Signup />} />
-              <Route path="/admin" element={<Admin />} />
               <Route path="/live/:id" element={<ViewLive />} />
               <Route path="/video/:id" element={<ViewVideo />} />
-              <Route path="*" element={<ErrorPage />} />
               <Route path="/studio" element={<Studio />} />
+              <Route path="*" element={<ErrorPage />} />
+
+              <Route path="/admin" element={<Admin />} />
 
               <Route path="/channel/:channelid" element={<ChannelLayout />}>
                 <Route index element={<ChannelHome />} />
@@ -63,27 +63,8 @@ function App() {
   );
 }
 
-const RTMP_SERVER = process.env.REACT_APP_RTMP_URL || 'rtmp://localhost/live';
-
 function MainPage() {
-  const { user } = useAuth();
-  const [streamKey, setStreamKey] = useState('');
-  const [streamKeyMessage, setStreamKeyMessage] = useState({ type: '', text: '' });
-  const [streamKeyLoading, setStreamKeyLoading] = useState(false);
-
   const [section, setSection] = useState([]);
-
-  useEffect(() => {
-    if (!user) return;
-    (async () => {
-      try {
-        const { data } = await api.post('/api/me/streamkey');
-        setStreamKey(data.stream_key || '');
-      } catch {
-        setStreamKey('');
-      }
-    })();
-  }, [user]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -97,49 +78,9 @@ function MainPage() {
     fetchData();
   }, []);
 
-  const handleRegenerateStreamKey = async () => {
-    setStreamKeyMessage({ type: '', text: '' });
-    setStreamKeyLoading(true);
-    try {
-      const { data } = await api.post('/api/me/stream-key/regenerate');
-      setStreamKey(data.stream_key || '');
-      setStreamKeyMessage({ type: 'success', text: data.message || '새 스트림 키가 발급되었습니다.' });
-    } catch (err) {
-      const text = err.response?.data?.error || '재발급에 실패했습니다.';
-      setStreamKeyMessage({ type: 'error', text });
-    } finally {
-      setStreamKeyLoading(false);
-    }
-  };
-
   return (
     <div>
       <h3>메인 페이지</h3>
-
-      {user && (
-        <div className="stream-key-box">
-          <h4>방송 설정 (스트림 키)</h4>
-          <p className="stream-key-desc">OBS 등에서 아래 서버 주소와 스트림 키를 사용하세요. 스트림 키는 가입 시 자동 발급되며, 필요 시 재발급할 수 있습니다.</p>
-          <div className="stream-key-info">
-            <label>서버 주소</label>
-            <code>{RTMP_SERVER}</code>
-          </div>
-          <div className="stream-key-info">
-            <label>스트림 키</label>
-            <code className="stream-key-value">{streamKey || '불러오는 중...'}</code>
-          </div>
-          {streamKeyMessage.text && (
-            <div className={`message message-${streamKeyMessage.type}`}>{streamKeyMessage.text}</div>
-          )}
-          <button type="button" className="stream-key-btn" onClick={handleRegenerateStreamKey} disabled={streamKeyLoading}>
-            {streamKeyLoading ? '처리 중...' : '스트림 키 재발급'}
-          </button>
-          {streamKey && (
-            <p className="stream-key-current">위 키로 방송을 시작하면 자동으로 방송 중으로 표시됩니다.</p>
-          )}
-        </div>
-      )}
-
       <div className="content-grid">
         {section && section.map((section, idx) => (
           <div key={idx} className="section-container">
@@ -166,7 +107,7 @@ function ViewLive() {
 
   const videoRef = VideoStream(channelid);
   if(videoRef === null)
-    return <div className="error"> <Link to="/">돌아가기</Link></div>;
+    return ErrorPage();
 
   return (
     <div className="video-page-layout" style={{ display: 'flex', height: 'calc(100vh - 60px)' }}>
@@ -341,7 +282,63 @@ function ViewVideo() {
 }
 
 function Studio(){
-  return <div></div>;
+  const { user } = useAuth();
+  const [streamKey, setStreamKey] = useState('');
+  const [streamKeyMessage, setStreamKeyMessage] = useState({ type: '', text: '' });
+  const [streamKeyLoading, setStreamKeyLoading] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const { data } = await api.post('/api/me/streamkey'); // TODO : 
+        setStreamKey(data.stream_key || '');
+      } catch {
+        setStreamKey('');
+      }
+    })();
+  }, [user]);
+
+  const handleRegenerateStreamKey = async () => {
+    setStreamKeyMessage({ type: '', text: '' });
+    setStreamKeyLoading(true);
+    try {
+      const { data } = await api.post('/api/me/stream-key/regenerate');
+      setStreamKey(data.stream_key || '');
+      setStreamKeyMessage({ type: 'success', text: data.message || '새 스트림 키가 발급되었습니다.' });
+    } catch (err) {
+      const text = err.response?.data?.error || '재발급에 실패했습니다.';
+      setStreamKeyMessage({ type: 'error', text });
+    } finally {
+      setStreamKeyLoading(false);
+    }
+  };
+
+  return <div>
+    {user && (
+      <div className="stream-key-box">
+        <h4>방송 설정 (스트림 키)</h4>
+        <p className="stream-key-desc">OBS 등에서 아래 서버 주소와 스트림 키를 사용하세요. 스트림 키는 가입 시 자동 발급되며, 필요 시 재발급할 수 있습니다.</p>
+        <div className="stream-key-info">
+          <label>서버 주소</label>
+          <code>{process.env.REACT_APP_RTMP_URL || 'rtmp://localhost/live' /* //TODO */}</code>
+        </div>
+        <div className="stream-key-info">
+          <label>스트림 키</label>
+          <code className="stream-key-value">{streamKey || '불러오는 중...'}</code>
+        </div>
+        {streamKeyMessage.text && (
+          <div className={`message message-${streamKeyMessage.type}`}>{streamKeyMessage.text}</div>
+        )}
+        <button type="button" className="stream-key-btn" onClick={handleRegenerateStreamKey} disabled={streamKeyLoading}>
+          {streamKeyLoading ? '처리 중...' : '스트림 키 재발급'}
+        </button>
+        {streamKey && (
+          <p className="stream-key-current">위 키로 방송을 시작하면 자동으로 방송 중으로 표시됩니다.</p>
+        )}
+      </div>
+    )}
+  </div>
 }
 
 function ErrorPage(){
