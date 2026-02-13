@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { getStoredUser, setAuth as saveAuth, clearAuth } from '../api';
+import { API } from '../api';
 
 const AuthContext = createContext(null);
 
@@ -7,16 +7,16 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-    setUser(getStoredUser());
+    setUser(API.getStoredUser());
   }, []);
 
   const login = (userData, token) => {
-    saveAuth(userData, token);
+    API.setAuth(userData, token);
     setUser(userData);
   };
 
   const logout = () => {
-    clearAuth();
+    API.clearAuth();
     setUser(null);
   };
 

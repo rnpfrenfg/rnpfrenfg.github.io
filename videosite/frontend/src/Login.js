@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from './context/AuthContext';
-import { api } from './api';
+import { API } from './api';
 import './Signup.css';
 
 function Login() {
+  const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState({ type: '', text: '' });
@@ -16,26 +18,25 @@ function Login() {
     e.preventDefault();
     setMessage({ type: '', text: '' });
     setLoading(true);
-    try {
-      const { data } = await api.post('/api/login', { email, password });
+    const result = await API.login(email, password);
+    if (result.ok) {
+      const data = result.data || {};
       login(data.user, data.token);
-      setMessage({ type: 'success', text: '로그인되었습니다.' });
+      setMessage({ type: 'success', text: t('auth.loginSuccess') });
       setTimeout(() => navigate('/'), 500);
-    } catch (err) {
-      const text = err.response?.data?.error || '로그인에 실패했습니다.';
-      setMessage({ type: 'error', text });
-    } finally {
-      setLoading(false);
+    } else {
+      setMessage({ type: 'error', text: result.error || t('errors.LOGIN_FAILED') });
     }
+    setLoading(false);
   };
 
   return (
     <div className="signup-page">
       <div className="signup-box">
-        <h2>로그인</h2>
+        <h2>{t('auth.loginTitle')}</h2>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label htmlFor="email">이메일</label>
+            <label htmlFor="email">{t('auth.email')}</label>
             <input
               id="email"
               type="email"
@@ -47,7 +48,7 @@ function Login() {
             />
           </div>
           <div className="form-group">
-            <label htmlFor="password">비밀번호</label>
+            <label htmlFor="password">{t('auth.password')}</label>
             <input
               id="password"
               type="password"
@@ -61,11 +62,11 @@ function Login() {
             <div className={`message message-${message.type}`}>{message.text}</div>
           )}
           <button type="submit" className="signup-btn" disabled={loading}>
-            {loading ? '로그인 중...' : '로그인'}
+            {loading ? t('common.loading') : t('nav.login')}
           </button>
         </form>
         <p className="signup-footer">
-          계정이 없으신가요? <Link to="/signup">회원가입</Link>
+          {t('auth.noAccount')} <Link to="/signup">{t('auth.signupLink')}</Link>
         </p>
       </div>
     </div>

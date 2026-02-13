@@ -1,12 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from './context/AuthContext';
-import { api } from './api';
+import { API } from './api';
 import './Admin.css';
 
-const ROLE_LABELS = { 1: '1 (권한없음)', 2: '2 (상담)', 3: '3 (권한변경)', 4: '4 (root)' };
+const ROLE_LABELS = {
+  1: '1 (권한없음)',
+  2: '2 (상담)',
+  3: '3 (권한변경)',
+  4: '4 (root)',
+};
 
 function Admin() {
+  const { t } = useTranslation();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [users, setUsers] = useState([]);
@@ -20,60 +27,65 @@ function Admin() {
       navigate('/', { replace: true });
       return;
     }
+
     let cancelled = false;
-    api.post('/api/users')
-      .then(({ data }) => { if (!cancelled) setUsers(data); })
-      .catch((err) => {
-        if (!cancelled) {
-          if (err.response?.status === 401) navigate('/login', { replace: true });
-          else setMessage({ type: 'error', text: err.response?.data?.error || '유저 목록을 불러오지 못했습니다.' });
-        }
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
+    (async () => {
+      const result = await API.getUsers();
+      if (cancelled) return;
+
+      if (result.ok) {
+        setUsers(Array.isArray(result.data) ? result.data : []);
+      } else if (result.status === 401) {
+        navigate('/login', { replace: true });
+      } else {
+        setMessage({ type: 'error', text: result.error || t('errors.USERS_FETCH_FAILED') });
+      }
+      setLoading(false);
+    })();
+
     return () => { cancelled = true; };
-  }, [user, navigate]);
+  }, [user, navigate, t]);
 
   const handleRoleChange = async (userId, newRole) => {
     const r = Number(newRole);
     if (r < 1 || r > 4) return;
+
     setUpdatingId(userId);
     setMessage({ type: '', text: '' });
-    try {
-      await api.patch(`/api/users/${userId}`, { role: r });
-      setUsers((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, role: r } : u))
-      );
-      setMessage({ type: 'success', text: '권한이 변경되었습니다.' });
-    } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.error || '권한 변경에 실패했습니다.' });
-    } finally {
-      setUpdatingId(null);
+
+    const result = await API.updateUserRole(userId, r);
+    if (result.ok) {
+      setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, role: r } : u)));
+      setMessage({ type: 'success', text: t('admin.roleChanged') });
+    } else {
+      setMessage({ type: 'error', text: result.error || t('errors.ROLE_UPDATE_FAILED') });
     }
+    setUpdatingId(null);
   };
 
   if (user === null) return null;
-  if (user.role<2) return null;
+  if (user.role < 2) return null;
 
   return (
     <div className="admin-page">
-      <h2>관리자 페이지 — 유저 목록</h2>
+      <h2>{t('admin.title')}</h2>
       {message.text && (
         <div className={`admin-message admin-message-${message.type}`}>
           {message.text}
         </div>
       )}
       {loading ? (
-        <p className="admin-loading">불러오는 중...</p>
+        <p className="admin-loading">{t('admin.loading')}</p>
       ) : (
         <div className="admin-table-wrap">
           <table className="admin-table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>이메일</th>
-                <th>사용자명</th>
-                <th>권한</th>
-                <th>가입일</th>
+                <th>{t('admin.table.id')}</th>
+                <th>{t('admin.table.email')}</th>
+                <th>{t('admin.table.username')}</th>
+                <th>{t('admin.table.role')}</th>
+                <th>{t('admin.table.createdAt')}</th>
               </tr>
             </thead>
             <tbody>
@@ -104,7 +116,7 @@ function Admin() {
         </div>
       )}
       <p className="admin-back">
-        <Link to="/">메인으로 돌아가기</Link>
+        <Link to="/">{t('admin.back')}</Link>
       </p>
     </div>
   );

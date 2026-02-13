@@ -54,20 +54,32 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+function sendSuccess(req, res, code, data = null) {
+  if (data === null) {
+    return res.status(204).end();
+  }
+  return res.status(200).json({ code, ...data });
+}
+function sendFailure(req, res, status, code) {
+  const warnLevel = status >= 500 ? 2 : status >= 400 ? 1 : 0;
+  console.log(`[${warnLevel}] bad request! at ${req} : ${code}`);
+  return res.status(status).json({ code });
+}
+
 app.get('/static/js/admin.js', (req, res, next) => {
   const token = req.headers.authorization;
   
-  if (!token) return res.status(403).send('Access Denied');
+  if (!token) return sendFailure(req, res, 401, 'ACCESS_DENIED');
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     if (decoded.role >= 2) {
       next();
     } else {
-      res.status(403).send('Forbidden');
+      sendFailure(req, res, 403, 'FORBIDDEN');
     }
   } catch (err) {
-    res.status(403).send('Invalid Token');
+    sendFailure(req, res, 401, 'INVALID_TOKEN');
   }
 });
 
@@ -116,6 +128,13 @@ function decodeWsUser(token) {
   }
 }
 
+function sendWsError(ws, code, shouldClose = false) {
+  ws.send(JSON.stringify({ type: 'error', code }));
+  if (shouldClose) {
+    ws.close();
+  }
+}
+
 //from nginx
 app.post('/api/livestartauth', async (req, res) => {
   try{
@@ -124,10 +143,10 @@ app.post('/api/livestartauth', async (req, res) => {
     const [dbres] = await dbPool.execute('SELECT id, channelname FROM livesetting WHERE stream_key = ?', [streamKey]);
 
     if (dbres.length < 1) {
-      res.status(404).send();
+      sendFailure(req, res, 404, 'LIVE_START_AUTH_NOT_FOUND');
       return;
     }
-    res.status(200).send();
+    sendSuccess(req, res, 'LIVE_START_AUTH_OK');
 
     const channel = dbres[0];
     const [result] = await dbPool.execute(
@@ -158,12 +177,12 @@ app.post('/api/livedone', async (req, res) => {
       const user = users[0];
       await dbPool.execute('UPDATE livesetting SET is_live = 0 WHERE id = ?', [user.id]);
 
-      broadcastToChannel(user.id, { type: 'chat', message: '방송이 종료되었습니다.' });
+      broadcastToChannel(user.id, { type: 'system', code: 'WS_BROADCAST_ENDED' });
     }
-    res.status(200).send();
+    sendSuccess(req, res, 'LIVE_DONE_OK');
   } catch (err) {
     console.error(err);
-    res.status(500).send();
+    sendFailure(req, res, 500, 'LIVE_DONE_FAILED');
   }
 });
 
@@ -172,12 +191,12 @@ app.post('/api/recorddone', async (req, res) => {
   const streamKey = req.body.name;
   const flvPath = req.body.path;
   
-  if (!flvPath) return res.status(400).send('No path');
+  if (!flvPath) return sendFailure(req, res, 400, 'RECORD_DONE_PATH_MISSING');
 
   const mp4Path = flvPath.replace('.flv', '.mp4');
   const filename = path.basename(mp4Path);
 
-  res.send('Started');
+  sendSuccess(req, res, 'RECORD_DONE_STARTED');
 
   exec(`ffmpeg -y -i "${flvPath}" -c copy "${mp4Path}"`, async (error) => {
     if (error) return console.error("FFmpeg error:", error);
@@ -219,11 +238,11 @@ app.get('/api/channel/info/:channelid', async (req, res) => {
       [channelid]
     );
 
-    if (rows.length === 0) return res.status(404).json({ error: '채널을 찾을 수 없습니다.' });
-    
-    res.json(rows[0]);
+    if (rows.length === 0) return sendFailure(req, res, 404, 'CHANNEL_NOT_FOUND');
+
+    sendSuccess(req, res, 'CHANNEL_INFO_FETCH_SUCCESS', rows[0]);
   } catch (err) {
-    res.status(500).json({ error: '서버 오류' });
+    sendFailure(req, res, 500, 'CHANNEL_INFO_FETCH_FAILED');
   }
 });
 
@@ -244,13 +263,13 @@ app.get('/api/channel/videos', async (req, res) => {
             [channelid]
         );
 
-        res.json({
+        sendSuccess(req, res, 'CHANNEL_VIDEOS_FETCH_SUCCESS', {
             videos,
             currentPage: page,
             totalPages: Math.ceil(totalCount[0].count / limit)
         });
     } catch (err) {
-        res.status(500).json({ error: '비디오 목록을 불러오지 못했습니다.' });
+        sendFailure(req, res, 500, 'CHANNEL_VIDEOS_FETCH_FAILED');
         console.log(err);
     }
 });
@@ -260,18 +279,16 @@ app.get('/api/video/info', async (req, res) => {
   try {
     const [rows] = await dbPool.query('SELECT * FROM videos WHERE id = ?', [videoId]);
     
-    if (rows.length === 0) {
-      return res.status(404).json({ error: '비디오를 찾을 수 없습니다.' });
-    }
+    if (rows.length === 0) return sendFailure(req, res, 404, 'VIDEO_NOT_FOUND');
     const video = rows[0];
     const fullVideoUrl = `${NGINX_SERVER}/recordings/${video.filename}`;
-    res.json({
+    sendSuccess(req, res, 'VIDEO_INFO_FETCH_SUCCESS', {
       ...video,
       url: fullVideoUrl
     });
   } catch (err) {
     console.error(err);
-    res.status(500).send('Server Error');
+    sendFailure(req, res, 500, 'VIDEO_INFO_FETCH_FAILED');
   }
 });
 
@@ -281,7 +298,7 @@ app.get('/api/proxy/:channelid/:filename', async (req, res) => {
   try {
     const [rows] = await dbPool.execute('SELECT stream_key FROM livesetting WHERE id = ?', [channelid]);
 
-    if (rows.length === 0) return res.status(404).send('User not found');
+    if (rows.length === 0) return sendFailure(req, res, 404, 'USER_NOT_FOUND');
     
     const streamKey = rows[0].stream_key;
 
@@ -290,7 +307,7 @@ app.get('/api/proxy/:channelid/:filename', async (req, res) => {
     res.setHeader('X-Accel-Redirect', internalPath);
     res.end(); 
   } catch (err) {
-    res.status(500).send('Proxy Error');
+    sendFailure(req, res, 500, 'PROXY_ERROR');
     console.error(err);
   }
 });
@@ -303,7 +320,8 @@ app.get('/api/mainpage', async (req, res) => {
     const [videos] = await dbPool.execute(
       'SELECT id, title, channelid FROM videos WHERE filename IS NOT NULL ORDER BY created_at LIMIT 16'
     );
-    res.status(200).json([
+    sendSuccess(req, res, 'MAINPAGE_FETCH_SUCCESS', {
+      sections: [
       {
         title: "지금 라이브 중!",
         list: lives.map(l => ({
@@ -320,21 +338,22 @@ app.get('/api/mainpage', async (req, res) => {
           link: `/video/${v.id}`
         }))
       }
-    ]);
+      ]
+    });
   } catch (err) {
     console.error('라이브 목록 조회 오류:', err);
-    res.status(500).json({ error: '라이브 목록을 불러오지 못했습니다.' });
+    sendFailure(req, res, 500, 'LIVE_LIST_FETCH_FAILED');
   }
 });
 
 app.get('/api/liveurl', async (req, res) => {
-  res.status(201).send({url:`${NGINX_SERVER}/live/${req.query.channelid}/index.m3u8`})
+  sendSuccess(req, res, 'LIVE_URL_FETCH_SUCCESS', { url: `${NGINX_SERVER}/live/${req.query.channelid}/index.m3u8` });
 });
 
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
-    return res.status(400).json({ error: '이메일과 비밀번호를 입력해주세요.' });
+    return sendFailure(req, res, 400, 'LOGIN_MISSING_FIELDS');
   }
   try {
     const [rows] = await dbPool.execute(
@@ -342,35 +361,35 @@ app.post('/api/login', async (req, res) => {
       [email.trim()]
     );
     if (rows.length === 0) {
-      return res.status(401).json({ error: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+      return sendFailure(req, res, 401, 'LOGIN_INVALID_CREDENTIALS');
     }
     const user = rows[0];
     const match = await bcrypt.compare(password, user.password_hash)
     if (!match) {
-      return res.status(401).json({ error: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+      return sendFailure(req, res, 401, 'LOGIN_INVALID_CREDENTIALS');
     }
     const token = jwt.sign(
       { userId: user.id, role: user.role },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
-    res.json({
+    sendSuccess(req, res, 'LOGIN_SUCCESS', {
       user: { id: user.id, email: user.email, username: user.username, role: user.role },
       token
     });
   } catch (err) {
     console.error('로그인 오류:', err);
-    res.status(500).json({ error: '로그인 처리 중 오류가 발생했습니다.' });
+    sendFailure(req, res, 500, 'LOGIN_FAILED');
   }
 });
 
 app.post('/api/signup', async (req, res) => {
   const { email, username, password } = req.body;
   if (!email || !username || !password) {
-    return res.status(400).json({ error: '이메일, 사용자명, 비밀번호를 모두 입력해주세요.' });
+    return sendFailure(req, res, 400, 'SIGNUP_MISSING_FIELDS');
   }
   if (password.length < 6) {
-    return res.status(400).json({ error: '비밀번호는 6자 이상이어야 합니다.' });
+    return sendFailure(req, res, 400, 'SIGNUP_PASSWORD_TOO_SHORT');
   }
   try {
     const password_hash = await bcrypt.hash(password, 10);
@@ -381,13 +400,13 @@ app.post('/api/signup', async (req, res) => {
     const userId = result.insertId;
     const stream_key = generateStreamKey(userId);
     await dbPool.execute('INSERT INTO livesetting (id, channelname, stream_key) VALUES (?, ?, ?)', [userId, username.trim(), stream_key]);
-    res.status(201).json({ message: '회원가입이 완료되었습니다.' });
+    sendSuccess(req, res, 'SIGNUP_SUCCESS');
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: '이미 사용 중인 이메일입니다.' });
+      return sendFailure(req, res, 409, 'SIGNUP_DUPLICATE_EMAIL');
     }
     console.log('회원가입 오류:', err);
-    res.status(500).json({ error: '회원가입 처리 중 오류가 발생했습니다.' });
+    sendFailure(req, res, 500, 'SIGNUP_FAILED');
   }
 });
 
@@ -410,17 +429,15 @@ app.post('/api/me/streamkey', authMiddleware, async (req, res) => {
       'SELECT stream_key FROM livesetting WHERE id = ?',
       [channelid]
     );
-    if (rows.length === 0) {
-      return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
-    }
+    if (rows.length === 0) return sendFailure(req, res, 404, 'USER_NOT_FOUND');
     let stream_key = rows[0].stream_key;
     if (!stream_key) {
       stream_key = await regenerateStreamKey(channelid);
     }
-    res.json({ stream_key });
+    sendSuccess(req, res, 'STREAM_KEY_FETCH_SUCCESS', { stream_key });
   } catch (err) {
     console.log('스트림 키 조회 오류:', err);
-    res.status(500).json({ error: '스트림 키를 불러오지 못했습니다.' });
+    sendFailure(req, res, 500, 'STREAM_KEY_FETCH_FAILED');
   }
 });
 
@@ -428,11 +445,11 @@ app.post('/api/me/stream-key/regenerate', authMiddleware, async (req, res) => {
   const channelid = req.user.id;
   const stream_key = await regenerateStreamKey(channelid);
   if(stream_key !== null){
-    res.json({ message: '새 스트림 키가 발급되었습니다.', stream_key });
+    sendSuccess(req, res, 'STREAM_KEY_REGENERATE_SUCCESS', { stream_key });
   }
   else{
     console.error('스트림 키 재발급 오류');
-    res.status(500).json({ error: '스트림 키 재발급에 실패했습니다.' });
+    sendFailure(req, res, 500, 'STREAM_KEY_REGENERATE_FAILED');
   }
 });
 
@@ -441,10 +458,10 @@ app.post('/api/users', authMiddleware, requireAdmin, async (req, res) => {
     const [rows] = await dbPool.execute(
       'SELECT id, email, username, role, created_at FROM users ORDER BY id'
     );
-    res.json(rows);
+    sendSuccess(req, res, 'USERS_FETCH_SUCCESS', { users: rows });
   } catch (err) {
     console.error('유저 목록 조회 오류:', err);
-    res.status(500).json({ error: '유저 목록을 불러오지 못했습니다.' });
+    sendFailure(req, res, 500, 'USERS_FETCH_FAILED');
   }
 });
 
@@ -452,21 +469,21 @@ app.patch('/api/users/:id', authMiddleware, requireAdmin, async (req, res) => {
   const userId = Number(req.params.id);
   const { role } = req.body;
   if (role === undefined || role === null) {
-    return res.status(400).json({ error: '권한(role) 값을 보내주세요.' });
+    return sendFailure(req, res, 400, 'ROLE_MISSING');
   }
   const r = Number(role);
   if (!Number.isInteger(r) || r < 1 || r > 4) {
-    return res.status(400).json({ error: '권한은 1~4 사이의 숫자여야 합니다.' });
+    return sendFailure(req, res, 400, 'ROLE_INVALID');
   }
   try {
     const [result] = await dbPool.execute('UPDATE users SET role = ? WHERE id = ?', [r, userId]);
     if (result.affectedRows === 0) {
-      return res.status(404).json({ error: '해당 유저를 찾을 수 없습니다.' });
+      return sendFailure(req, res, 404, 'USER_NOT_FOUND');
     }
-    res.json({ message: '권한이 변경되었습니다.', role: r });
+    sendSuccess(req, res, 'ROLE_UPDATED');
   } catch (err) {
     console.error('권한 변경 오류:', err);
-    res.status(500).json({ error: '권한 변경에 실패했습니다.' });
+    sendFailure(req, res, 500, 'ROLE_UPDATE_FAILED');
   }
 });
 
@@ -482,29 +499,26 @@ wss.on('connection', async (ws, req) => {
     const token = requestUrl.searchParams.get('token');
 
     if (!channelid) {
-      ws.send(JSON.stringify({ type: 'error', error: 'channelid is required' }));
-      ws.close();
+      sendWsError(ws, 'WS_CHANNEL_ID_REQUIRED', true);
       return;
     }
 
     ws.channelid = channelid;
     ws.user = decodeWsUser(token);
     if(ws.user == null){
-      ws.send(JSON.stringify({ type: 'error', error: 'login plz' }));
-      ws.close();
+      sendWsError(ws, 'AUTH_REQUIRED', true);
       return;
     }
 
     const [userRows] = await dbPool.execute('SELECT username FROM users WHERE id = ?', [ws.user.id]);
     if (userRows.length === 0) {
-      ws.send(JSON.stringify({ type: 'error', error: '유저를 찾을 수 없습니다.' }));
+      sendWsError(ws, 'USER_NOT_FOUND');
       return;
     }
     ws.user.username= userRows[0].username
     getChannelClients(channelid).add(ws);
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'error', error: '채팅 연결 초기화 실패' }));
-    ws.close();
+    sendWsError(ws, 'WS_CONNECTION_INIT_FAILED', true);
     return;
   }
 
@@ -513,7 +527,7 @@ wss.on('connection', async (ws, req) => {
     try {
       parsed = JSON.parse(rawData.toString());
     } catch (err) {
-      ws.send(JSON.stringify({ type: 'error', error: '잘못된 메시지 형식입니다.' }));
+      sendWsError(ws, 'WS_INVALID_MESSAGE_FORMAT');
       return;
     }
 
@@ -523,33 +537,32 @@ wss.on('connection', async (ws, req) => {
 
     const text = typeof parsed.message === 'string' ? parsed.message.trim() : '';
     if (!text) {
-      ws.send(JSON.stringify({ type: 'error', error: '메시지를 입력해주세요.' }));
+      sendWsError(ws, 'WS_MESSAGE_REQUIRED');
       return;
     }
 
     if (!ws.user) {
-      ws.send(JSON.stringify({ type: 'error', error: '로그인이 필요합니다.' }));
+      sendWsError(ws, 'AUTH_REQUIRED');
       return;
     }
 
     try {
       const [userRows] = await dbPool.execute('SELECT username FROM users WHERE id = ?', [ws.user.id]);
       if (userRows.length === 0) {
-        ws.send(JSON.stringify({ type: 'error', error: '유저를 찾을 수 없습니다.' }));
+        sendWsError(ws, 'USER_NOT_FOUND');
         return;
       }
 
       const [rows] = await dbPool.execute('SELECT stream_key FROM livesetting WHERE id = ?', [ws.user.id]);
       if (rows.length === 0) {
-        ws.send(JSON.stringify({ type: 'error', error: '방송을 찾을 수 없습니다.' }));
-        ws.close();
+        sendWsError(ws, 'CHANNEL_NOT_FOUND', true);
         return;
       }
       const streamKey = rows[0].stream_key;
 
       const session = liveSessions.get(streamKey);
       if (!session) {
-        ws.send(JSON.stringify({ type: 'error', error: '로그인이 필요합니다.' }));
+        sendWsError(ws, 'WS_SESSION_NOT_FOUND');
         return;
       }
       await dbPool.execute(
@@ -567,7 +580,7 @@ wss.on('connection', async (ws, req) => {
         message: chatMessage,
       });
     } catch (err) {
-      ws.send(JSON.stringify({ type: 'error', error: '채팅 전송 실패' }));
+      sendWsError(ws, 'WS_CHAT_SEND_FAILED');
       console.log('채팅 전송 에러', err);
     }
   });
@@ -584,3 +597,4 @@ wss.on('connection', async (ws, req) => {
 });
 
 server.listen(4000, () => console.log('API Server running on port 4000'));
+

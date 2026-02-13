@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { api } from './api';
+import { useTranslation } from 'react-i18next';
+import { API } from './api';
 import { useAuth } from './context/AuthContext';
 
 function buildWsUrl(baseHttpUrl, channelid, token) {
@@ -14,9 +15,11 @@ function buildWsUrl(baseHttpUrl, channelid, token) {
 }
 
 function Chat({ channelid }) {
+  const { t } = useTranslation();
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
+  const [errorText, setErrorText] = useState('');
   const wsRef = useRef(null);
   const chatEndRef = useRef(null);
 
@@ -24,21 +27,31 @@ function Chat({ channelid }) {
     if (!channelid) return;
 
     const token = localStorage.getItem('token');
-    const wsUrl = buildWsUrl(api.defaults.baseURL, channelid, token);
+    const wsUrl = buildWsUrl(API.client.defaults.baseURL, channelid, token);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+    setErrorText('');
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log(data.type);
         if (data.type === 'chat' && data.message) {
           setMessages((prev) => [...prev, data.message]);
-        } else if (data.type === 'error' && data.error) {
-          console.error(data.error);
+          return;
         }
-      } catch (err) {
-        console.error('채팅 메시지 파싱 실패');
+
+        if (data.type === 'system' && data.code) {
+          const translated = t(`errors.${data.code}`, { defaultValue: t('chat.systemNotice') });
+          setMessages((prev) => [...prev, { username: t('chat.system'), message: translated }]);
+          return;
+        }
+
+        if (data.type === 'error' && data.code) {
+          const translated = t(`errors.${data.code}`, { defaultValue: t('common.serverError') });
+          setErrorText(translated);
+        }
+      } catch {
+        setErrorText(t('errors.WS_INVALID_MESSAGE_FORMAT'));
       }
     };
 
@@ -54,7 +67,7 @@ function Chat({ channelid }) {
         wsRef.current = null;
       }
     };
-  }, [channelid]);
+  }, [channelid, t]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -65,7 +78,7 @@ function Chat({ channelid }) {
     if (!inputText.trim() || !user) return;
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      alert('채팅 서버에 연결되지 않았습니다. 잠시 후 다시 시도해주세요.');
+      setErrorText(t('errors.WS_CONNECTION_NOT_READY'));
       return;
     }
 
@@ -78,6 +91,8 @@ function Chat({ channelid }) {
 
   return (
     <div className="chat-container" style={{ borderLeft: '1px solid #ddd', width: '300px', display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {errorText && <div className="message message-error" style={{ margin: '10px' }}>{errorText}</div>}
+
       <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
         {messages.map((msg, i) => (
           <div key={i} style={{ marginBottom: '8px' }}>
@@ -94,12 +109,12 @@ function Chat({ channelid }) {
             <input
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder="채팅을 입력하세요.."
+              placeholder={t('chat.inputPlaceholder')}
             />
-            <button type="submit">전송</button>
+            <button type="submit">{t('chat.send')}</button>
           </div>
         ) : (
-          <p style={{ fontSize: '0.8rem', color: '#888' }}>로그인 후 채팅 가능합니다.</p>
+          <p style={{ fontSize: '0.8rem', color: '#888' }}>{t('chat.loginRequired')}</p>
         )}
       </form>
     </div>
