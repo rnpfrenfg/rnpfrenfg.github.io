@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { API } from './api';
-import './Signup.css';
 
 function Signup() {
   const { t } = useTranslation();

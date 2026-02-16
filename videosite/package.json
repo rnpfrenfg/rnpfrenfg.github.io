@@ -8,12 +8,28 @@
   "scripts": {
     "prestart": "npm run nginx-stop",
     "start": "concurrently --kill-others \"npm run backend\" \"npm run frontend\" \"npm run nginx\"",
+    "build": "cd frontend && cross-env BUILD_PATH=../build react-scripts build",
     "backend": "cd backend && node index.js",
     "frontend": "cd frontend && npm start",
     "nginx": "cd nginx && nginx.exe",
-    "nginx-stop": "taskkill /f /im nginx.exe /t 2>nul || exit 0"
+    "nginx-stop": "taskkill /f /im nginx.exe /t 2>nul || exit 0",
+    "lint": "eslint .",
+    "improvecode": "eslint . --fix",
+    "check": "eslint . && prettier . --check",
+    "build:prod": "npm run check && npm run build"
   },
   "dependencies": {
     "concurrently": "^9.2.1"
+  },
+  "devDependencies": {
+    "@eslint/css": "^0.14.1",
+    "@eslint/js": "^9.39.2",
+    "@eslint/json": "^1.0.1",
+    "@eslint/markdown": "^7.5.1",
+    "cross-env": "^10.1.0",
+    "eslint": "^9.39.2",
+    "eslint-plugin-react": "^7.37.5",
+    "globals": "^17.3.0",
+    "prettier": "^3.8.1"
   }
 }

@@ -1,19 +1,11 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-const dbConfig = {
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.DB_NAME,
-  waitForConnections: true,
-  connectionLimit: 1000,
-  queueLimit: 0
-};
+function createDbPool(dbConfig) {
+  return mysql.createPool(dbConfig);
+}
 
-const dbPool = mysql.createPool(dbConfig);
-
-async function initDB() {
+async function initDB(dbPool, dbConfig) {
   let authenticated = false;
   let retryCount = 0;
   const maxRetries = 10;
@@ -83,4 +75,4 @@ async function initDB() {
   }
 }
 
-module.exports = { dbPool, initDB };
+module.exports = { createDbPool, initDB };

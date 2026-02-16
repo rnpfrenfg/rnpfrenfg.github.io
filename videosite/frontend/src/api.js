@@ -113,6 +113,17 @@ export const API = {
     return request({ method: 'get', url: '/api/video/info', params: { id } }, 'errors.VIDEO_INFO_FETCH_FAILED');
   },
 
+  getVideoChat(videoId, at, window = 5) {
+    return request(
+      { method: 'get', url: `/api/video/${videoId}/chat`, params: { at, window } },
+      'errors.VIDEO_CHAT_FETCH_FAILED'
+    );
+  },
+
+  getVideoThumbnailUrl(url) {
+    return `${baseURL}${url}`;
+  },
+
   getLiveUrl(channelid) {
     return request({ method: 'get', url: '/api/liveurl', params: { channelid } }, 'errors.LIVE_INFO_FETCH_FAILED');
   },

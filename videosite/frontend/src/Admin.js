@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from './context/AuthContext';
 import { API } from './api';
-import './Admin.css';
 
 const ROLE_LABELS = {
   1: '1 (권한없음)',

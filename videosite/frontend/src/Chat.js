@@ -90,22 +90,22 @@ function Chat({ channelid }) {
   };
 
   return (
-    <div className="chat-container" style={{ borderLeft: '1px solid #ddd', width: '300px', display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {errorText && <div className="message message-error" style={{ margin: '10px' }}>{errorText}</div>}
+    <div className="chat-container">
+      {errorText && <div className="message message-error chat-error">{errorText}</div>}
 
-      <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
+      <div className="chat-messages">
         {messages.map((msg, i) => (
-          <div key={i} style={{ marginBottom: '8px' }}>
-            <strong style={{ fontSize: '0.9rem' }}>{msg.username}</strong>:
-            <span style={{ fontSize: '0.9rem', marginLeft: '5px' }}>{msg.message}</span>
+          <div key={i} className="chat-messageRow">
+            <strong className="chat-username">{msg.username}</strong>:
+            <span className="chat-text">{msg.message}</span>
           </div>
         ))}
         <div ref={chatEndRef} />
       </div>
 
-      <form onSubmit={handleSendMessage} style={{ padding: '10px', borderTop: '1px solid #ddd' }}>
+      <form onSubmit={handleSendMessage} className="chat-form">
         {user ? (
-          <div style={{ display: 'flex' }}>
+          <div className="chat-inputRow">
             <input
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
@@ -114,11 +114,82 @@ function Chat({ channelid }) {
             <button type="submit">{t('chat.send')}</button>
           </div>
         ) : (
-          <p style={{ fontSize: '0.8rem', color: '#888' }}>{t('chat.loginRequired')}</p>
+          <p className="chat-loginHint">{t('chat.loginRequired')}</p>
         )}
       </form>
     </div>
   );
 }
 
+function VodChat({ videoId, getCurrentTime }) {
+  const { t } = useTranslation();
+  const [messages, setMessages] = useState([]);
+  const [errorText, setErrorText] = useState('');
+  const seenIdsRef = useRef(new Set());
+  const lastFetchRef = useRef({ at: -1, ts: 0 });
+
+  useEffect(() => {
+    seenIdsRef.current = new Set();
+    setMessages([]);
+    setErrorText('');
+  }, [videoId]);
+
+  useEffect(() => {
+    if (!videoId) return;
+
+    const timer = setInterval(async () => {
+      const currentTime = typeof getCurrentTime === 'function' ? getCurrentTime() : null;
+      if (!Number.isFinite(currentTime)) return;
+
+      const at = Math.max(0, Math.floor(currentTime));
+      const now = Date.now();
+      const shouldFetch = at !== lastFetchRef.current.at || (now - lastFetchRef.current.ts) > 3000;
+      if (!shouldFetch) return;
+
+      lastFetchRef.current = { at, ts: now };
+      const result = await API.getVideoChat(videoId, at, 2);
+      if (!result.ok) {
+        setErrorText(result.error || t('common.serverError'));
+        return;
+      }
+
+      const list = Array.isArray(result.data?.messages) ? result.data.messages : [];
+      if (list.length === 0) return;
+
+      const next = [];
+      for (const item of list) {
+        if (!item?.id || seenIdsRef.current.has(item.id)) continue;
+        seenIdsRef.current.add(item.id);
+        next.push({ username: item.username, message: item.message });
+      }
+
+      if (next.length > 0) {
+        setMessages((prev) => [...prev, ...next]);
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [videoId, getCurrentTime, t]);
+
+  return (
+    <div className="chat-container">
+      {errorText && <div className="message message-error chat-error">{errorText}</div>}
+
+      <div className="chat-messages">
+        {messages.map((msg, i) => (
+          <div key={i} className="chat-messageRow">
+            <strong className="chat-username">{msg.username}</strong>:
+            <span className="chat-text">{msg.message}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="chat-form">
+        <p className="chat-loginHint">{t('chat.vodNotice', { defaultValue: t('chat.systemNotice') })}</p>
+      </div>
+    </div>
+  );
+}
+
+export { VodChat };
 export default Chat;

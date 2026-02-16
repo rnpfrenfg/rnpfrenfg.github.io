@@ -19,7 +19,6 @@ const resources = {
       },
       main: {
         leftBar: "팔로잉 채널 목록",
-        title: "메인 페이지"
       },
       channel: {
         move: "채널로 이동",

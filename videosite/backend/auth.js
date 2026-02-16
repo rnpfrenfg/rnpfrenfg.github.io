@@ -1,7 +1,5 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-
 function sendError(res, status, errorCode, error) {
   return res.status(status).json({ errorCode, error });
 }
@@ -29,4 +27,4 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { authMiddleware, requireAdmin, JWT_SECRET };
+module.exports = { authMiddleware, requireAdmin };

@@ -5,8 +5,8 @@ const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
-const { initDB, dbPool } = require('./db');
-const { authMiddleware, requireAdmin, JWT_SECRET } = require('./auth');
+const { initDB, createDbPool } = require('./db');
+const { authMiddleware, requireAdmin } = require('./auth');
 require('dotenv').config();
 const { exec } = require('child_process');
 const path = require('path');
@@ -19,7 +19,12 @@ process.on('uncaughtException', (err) => {
     console.error('\x1b[31m%s\x1b[0m', '[Uncaught Exception] ', err);
 });
 
-const directories = ['./media', './mediaend'];
+
+const LIVEFOLDER = path.join(__dirname, 'media');
+const VIDEOFOLDER = path.join(__dirname, 'mediaend');
+const THUMBNAILFOLDER = path.join(__dirname, 'mediathumbnail');
+
+const directories = [LIVEFOLDER, VIDEOFOLDER, THUMBNAILFOLDER];
 directories.forEach(dir => {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -27,15 +32,59 @@ directories.forEach(dir => {
     }
 });
 
+function getVideoThumbnailPath(videoId){
+  return path.join(THUMBNAILFOLDER, `${videoId}.jpg`);
+}
+
+function getVideoPath(videoId){
+  return path.join(VIDEOFOLDER, `${videoId}.mp4`);
+}
+
+async function createMediaThumbnail(videoId) {
+  const id = Number(videoId);
+  const thumbPath = getVideoThumbnailPath(id);
+
+  if (fs.existsSync(thumbPath)) return thumbPath;
+
+  try {
+    const videoPath = getVideoPath(videoId);
+    if (!fs.existsSync(videoPath)) return null;
+
+    exec(`ffmpeg -y -ss 00:00:01 -i "${videoPath}" -frames:v 1 -q:v 2 "${thumbPath}"`, async (error) => {
+      if (error) return console.error("FFmpeg error:", error);
+    });
+
+    return fs.existsSync(thumbPath) ? thumbPath : null;
+  } catch (err) {
+    console.warn('[Thumbnail] FFmpeg error:', err?.message || err);
+    return null;
+  }
+}
+
 function generateStreamKey(userId) {
   return `user_${userId}_${Date.now()}`;
 }
 
-async function startServer(){
-  await initDB();
+const JWT_SECRET = process.env.JWT_SECRET;
+if(JWT_SECRET == undefined || JWT_SECRET == null){
+    console.error(".env 파일의 JWT_SECRET이 작성되지 않았습니다.");
+    process.exit(1);
+}
 
+const dbConfig = {
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASS,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 1000,
+  queueLimit: 0
+};
+const dbPool = createDbPool(dbConfig);
+async function startServer(){
+  await initDB(dbPool, dbConfig);
   try{
-    dbPool.execute('UPDATE livesetting SET is_live = 0 WHERE is_live = 1')
+    dbPool.execute('UPDATE livesetting SET is_live = 0 WHERE is_live = 1') // TODO : 동영상 파일 처리, video 테이블도 정리
   }
   catch(err){
     console.log('db cleare err');
@@ -47,12 +96,28 @@ const NGINX_SERVER = 'http://localhost:8080';
 const liveSessions = new Map();
 const wsChannels = new Map();
 
+const LIVE_THUMB_INTERVAL_MS = 5 * 1000;
+const LIVE_THUMB_REFRESH_MS = 20 * 1000;
+const LIVE_THUMB_WARMUP_MS = 15 * 1000;
+const liveThumbState = new Map();
+let liveThumbQueue = Promise.resolve();
+let liveThumbScheduler = null;
+
 startServer();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+function buildLiveUrl(channelid) {
+  const id = String(channelid || '').trim();
+  return `${NGINX_SERVER}/live/${id}/index.m3u8`;
+}
+
+function getLiveHlsIndexPath(streamKey) {
+  return path.join(MEDIAFOLDER, streamKey, 'index.m3u8');
+}
 
 function sendSuccess(req, res, code, data = null) {
   if (data === null) {
@@ -62,7 +127,7 @@ function sendSuccess(req, res, code, data = null) {
 }
 function sendFailure(req, res, status, code) {
   const warnLevel = status >= 500 ? 2 : status >= 400 ? 1 : 0;
-  console.log(`[${warnLevel}] bad request! at ${req} : ${code}`);
+  console.log(`[${warnLevel}][${req.method}][${req.originalUrl} ]bad request! at ${req} : ${code}`);
   return res.status(status).json({ code });
 }
 
@@ -135,6 +200,85 @@ function sendWsError(ws, code, shouldClose = false) {
   }
 }
 
+function getOrCreateLiveThumbState(videoId) {
+  const id = Number(videoId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  if (!liveThumbState.has(id)) {
+    liveThumbState.set(id, { lastGeneratedAt: 0, version: 0, inProgress: false });
+  }
+  return liveThumbState.get(id);
+}
+
+async function updateLiveThumbnail(videoId, streamKey) {
+  const id = Number(videoId);
+  if (!Number.isInteger(id) || id <= 0) return false;
+  if (!streamKey) return false;
+
+  const m3u8Path = getLiveHlsIndexPath(streamKey);
+  if (!fs.existsSync(m3u8Path)) return false;
+
+  const thumbPath = getVideoThumbnailPath(id);
+  const tmpPath = `${thumbPath}.tmp.jpg`;
+
+  const state = getOrCreateLiveThumbState(id);
+  if (state) {
+    const now = Date.now();
+    state.lastGeneratedAt = now;
+    state.version = now;
+  }
+  try {
+    if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true });
+
+    exec(`ffmpeg -y -hide_banner -loglevel error -i "${m3u8Path}" -frames:v 1 -q:v 2 -f image2 "${tmpPath}"`, async (error) => {
+      if (error) return console.error("FFmpeg error:", error);
+
+      if (!fs.existsSync(tmpPath)) return false;
+      if (fs.existsSync(thumbPath)) fs.rmSync(thumbPath, { force: true });
+      fs.renameSync(tmpPath, thumbPath);
+
+      return true;
+    });
+  } catch (err) {
+    console.warn('[LiveThumbnail] ffmpeg error:', err?.message || err);
+    try {
+      if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true });
+    } catch {}
+    return false;
+  }
+}
+
+function startLiveThumbnailScheduler() {
+  if (liveThumbScheduler) return;
+
+  liveThumbScheduler = setInterval(() => {
+    const now = Date.now();
+
+    for (const [streamKey, session] of liveSessions.entries()) {
+      if (!session?.isLive) continue;
+      const videoId = session?.videoId;
+      const state = getOrCreateLiveThumbState(videoId);
+      if (!state) continue;
+      if (state.inProgress) continue;
+      if (now - (session?.startTime || 0) < LIVE_THUMB_WARMUP_MS) continue;
+      if (state.lastGeneratedAt && now - state.lastGeneratedAt < LIVE_THUMB_REFRESH_MS) continue;
+
+      state.inProgress = true;
+      liveThumbQueue = liveThumbQueue
+        .then(async () => {
+          try {
+            await updateLiveThumbnail(videoId, streamKey);
+          } finally {
+            state.inProgress = false;
+          }
+        })
+        .catch((err) => {
+          state.inProgress = false;
+          console.warn('[LiveThumbnail] queue error:', err?.message || err);
+        });
+    }
+  }, LIVE_THUMB_INTERVAL_MS);
+}
+
 //from nginx
 app.post('/api/livestartauth', async (req, res) => {
   try{
@@ -156,7 +300,8 @@ app.post('/api/livestartauth', async (req, res) => {
     
     await dbPool.execute('UPDATE livesetting SET is_live = 1 WHERE stream_key = ?', [streamKey]);
     const videoId = result.insertId;
-    liveSessions.set(streamKey, {videoId: videoId,startTime: Date.now()});
+    liveSessions.set(streamKey, { videoId, startTime: Date.now(), isLive: true });
+    getOrCreateLiveThumbState(videoId);
   }
   catch(err){
     console.error(err);
@@ -177,6 +322,9 @@ app.post('/api/livedone', async (req, res) => {
       const user = users[0];
       await dbPool.execute('UPDATE livesetting SET is_live = 0 WHERE id = ?', [user.id]);
 
+      const session = liveSessions.get(streamKey);
+      if (session) session.isLive = false;
+
       broadcastToChannel(user.id, { type: 'system', code: 'WS_BROADCAST_ENDED' });
     }
     sendSuccess(req, res, 'LIVE_DONE_OK');
@@ -193,7 +341,15 @@ app.post('/api/recorddone', async (req, res) => {
   
   if (!flvPath) return sendFailure(req, res, 400, 'RECORD_DONE_PATH_MISSING');
 
-  const mp4Path = flvPath.replace('.flv', '.mp4');
+  const session = liveSessions.get(streamKey);
+  const videoId = session?.videoId;
+
+  if(!((Number.isInteger(videoId) && videoId > 0))) {
+    console.warn('[RecordDone] Invalid videoId:', videoId);
+    return sendFailure(req, res, 400, 'RECORD_DONE_VIDEO_ID_INVALID');
+  }
+
+  const mp4Path = path.join(VIDEOFOLDER, `${videoId}.mp4`);
   const filename = path.basename(mp4Path);
 
   sendSuccess(req, res, 'RECORD_DONE_STARTED');
@@ -203,23 +359,19 @@ app.post('/api/recorddone', async (req, res) => {
 
     try {
       const [users] = await dbPool.execute('SELECT id, channelname FROM livesetting WHERE stream_key = ?', [streamKey]);
-      if (users.length > 0) {
-        const session = liveSessions.get(streamKey);
-        await dbPool.execute('UPDATE videos SET filename = ? WHERE id = ?', [filename, session.videoId]);
+      if (users.length === 0) {
+        return console.warn('[RecordDone] Invalid streamKey:', streamKey);
       }
+      await dbPool.execute('UPDATE videos SET filename = ? WHERE id = ?', [filename, videoId]);
       liveSessions.delete(streamKey);
+      liveThumbState.delete(videoId);
+      createMediaThumbnail(videoId);
 
       if (fs.existsSync(flvPath)) fs.unlinkSync(flvPath);
       
-      const hlsFolder = path.join(__dirname, 'media', streamKey);
+      const hlsFolder = path.join(MEDIAFOLDER, streamKey);
       if (fs.existsSync(hlsFolder)) {
         fs.rmSync(hlsFolder, { recursive: true, force: true });
-      }
-
-      const hlsFolderPath = path.join(__dirname, 'media', streamKey);
-      if (fs.existsSync(hlsFolderPath)) {
-        fs.rmSync(hlsFolderPath, { recursive: true, force: true });
-        console.log(`[Cleanup] HLS 임시 폴더 삭제 완료: ${hlsFolderPath}`);
       }
     } catch (err) {
         console.error("Post-process error:", err);
@@ -259,14 +411,14 @@ app.get('/api/channel/videos', async (req, res) => {
         );
 
         const [totalCount] = await dbPool.query(
-            'SELECT COUNT(*) as count FROM videos WHERE channelid = ?',
+            'SELECT COUNT(*) as count FROM videos WHERE channelid = ? AND filename IS NOT NULL',
             [channelid]
         );
 
         sendSuccess(req, res, 'CHANNEL_VIDEOS_FETCH_SUCCESS', {
             videos,
             currentPage: page,
-            totalPages: Math.ceil(totalCount[0].count / limit)
+            totalPages: Math.max(1, Math.ceil(Number(totalCount?.[0]?.count ?? 0) / limit))
         });
     } catch (err) {
         sendFailure(req, res, 500, 'CHANNEL_VIDEOS_FETCH_FAILED');
@@ -289,6 +441,62 @@ app.get('/api/video/info', async (req, res) => {
   } catch (err) {
     console.error(err);
     sendFailure(req, res, 500, 'VIDEO_INFO_FETCH_FAILED');
+  }
+});
+
+app.get('/api/video/:id/chat', async (req, res) => {
+  const videoId = Number(req.params.id);
+  const atSeconds = Number(req.query.at);
+  const windowSeconds = Number(req.query.window ?? 5);
+
+  if (!Number.isInteger(videoId) || videoId <= 0) {
+    return sendFailure(req, res, 400, 'VIDEO_ID_INVALID');
+  }
+  if (!Number.isFinite(atSeconds) || atSeconds < 0) {
+    return sendFailure(req, res, 400, 'CHAT_AT_INVALID');
+  }
+
+  const safeWindow = Number.isFinite(windowSeconds) && windowSeconds > 0 ? Math.min(windowSeconds, 30) : 5;
+  const fromSec = Math.max(0, Math.floor(atSeconds - safeWindow));
+  const toSec = Math.max(0, Math.floor(atSeconds + safeWindow));
+
+  try {
+    const [videos] = await dbPool.query('SELECT created_at FROM videos WHERE id = ?', [videoId]);
+    if (videos.length === 0) return sendFailure(req, res, 404, 'VIDEO_NOT_FOUND');
+    const baseTime = videos[0].created_at;
+
+    const [rows] = await dbPool.execute(
+      `SELECT id, username, message, created_at
+       FROM chats
+       WHERE video_id = ?
+         AND created_at BETWEEN DATE_ADD(?, INTERVAL ? SECOND) AND DATE_ADD(?, INTERVAL ? SECOND)
+       ORDER BY created_at ASC
+       LIMIT 200`,
+      [videoId, baseTime, fromSec, baseTime, toSec]
+    );
+
+    return sendSuccess(req, res, 'VIDEO_CHAT_FETCH_SUCCESS', { messages: rows });
+  } catch (err) {
+    console.error(err);
+    return sendFailure(req, res, 500, 'VIDEO_CHAT_FETCH_FAILED');
+  }
+});
+
+app.get('/thumbnail/:id', async (req, res) => {
+  const videoId = req.params.id;
+  if (!videoId) {
+    return sendFailure(req, res, 400, 'VIDEO_ID_INVALID');
+  }
+
+  try {
+    const thumbPath = getVideoThumbnailPath(videoId);
+    if (!fs.existsSync(thumbPath)) return sendFailure(req, res, 404, 'THUMBNAIL_NOT_FOUND');
+
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.sendFile(thumbPath);
+  } catch (err) {
+    console.error(err);
+    return sendFailure(req, res, 500, 'THUMBNAIL_FETCH_FAILED');
   }
 });
 
@@ -315,28 +523,37 @@ app.get('/api/proxy/:channelid/:filename', async (req, res) => {
 app.get('/api/mainpage', async (req, res) => {
   try {
     const [lives] = await dbPool.execute(
-      'SELECT id, channelname FROM livesetting WHERE is_live = 1 LIMIT 16'
+      'SELECT id, channelname, stream_key FROM livesetting WHERE is_live = 1 LIMIT 16'
     );
     const [videos] = await dbPool.execute(
-      'SELECT id, title, channelid FROM videos WHERE filename IS NOT NULL ORDER BY created_at LIMIT 16'
+      'SELECT id, title, channelid FROM videos WHERE filename IS NOT NULL ORDER BY created_at DESC LIMIT 16'
     );
     sendSuccess(req, res, 'MAINPAGE_FETCH_SUCCESS', {
       sections: [
       {
         title: "지금 라이브 중!",
-        list: lives.map(l => ({
-          title: l.channelname,
-          channelid: l.channelname,
-          link: `/live/${l.id}`
-        }))
+        list: lives.map((l) => {
+          const session = liveSessions.get(l.stream_key);
+          const videoId = session?.videoId ?? null;
+          const thumbnail = liveThumbState.get(videoId)?.version ?? null;
+          return {
+            title: l.channelname,
+            channelid: l.id,
+            link: `/live/${l.id}`,
+            thumbnail: (videoId && thumbnail > 0) ? (`/thumbnail/${videoId}?v=${thumbnail}`) : null,
+          };
+        })
       },
       {
         title: "인기 비디오",
-        list: videos.map(v => ({
-          title: v.title,
-          channelid: v.channelid,
-          link: `/video/${v.id}`
-        }))
+        list: videos.map(v => {
+          return {
+            title: v.title,
+            channelid: v.channelid,
+            link: `/video/${v.id}`,
+            thumbnail: `/thumbnail/${v.id}`
+          }
+        })
       }
       ]
     });
@@ -347,7 +564,7 @@ app.get('/api/mainpage', async (req, res) => {
 });
 
 app.get('/api/liveurl', async (req, res) => {
-  sendSuccess(req, res, 'LIVE_URL_FETCH_SUCCESS', { url: `${NGINX_SERVER}/live/${req.query.channelid}/index.m3u8` });
+  sendSuccess(req, res, 'LIVE_URL_FETCH_SUCCESS', { url: buildLiveUrl(req.query.channelid) });
 });
 
 app.post('/api/login', async (req, res) => {
@@ -553,7 +770,7 @@ wss.on('connection', async (ws, req) => {
         return;
       }
 
-      const [rows] = await dbPool.execute('SELECT stream_key FROM livesetting WHERE id = ?', [ws.user.id]);
+      const [rows] = await dbPool.execute('SELECT stream_key FROM livesetting WHERE id = ?', [ws.channelid]);
       if (rows.length === 0) {
         sendWsError(ws, 'CHANNEL_NOT_FOUND', true);
         return;
@@ -597,4 +814,4 @@ wss.on('connection', async (ws, req) => {
 });
 
 server.listen(4000, () => console.log('API Server running on port 4000'));
-
+startLiveThumbnailScheduler();
