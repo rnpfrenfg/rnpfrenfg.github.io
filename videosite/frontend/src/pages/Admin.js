@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useAuth } from './context/AuthContext';
-import { API } from './api';
+import { useAuth } from '../context/AuthContext';
+import { API } from '../api';
 
 const ROLE_LABELS = {
-  1: '1 (권한없음)',
-  2: '2 (상담)',
-  3: '3 (권한변경)',
+  1: '1 (\uC77C\uBC18)',
+  2: '2 (\uBAA8\uB354\uB808\uC774\uD130)',
+  3: '3 (\uAD00\uB9AC\uC790)',
   4: '4 (root)',
 };
 
@@ -62,7 +62,7 @@ function Admin() {
     setUpdatingId(null);
   };
 
-  if (user === null || user.role < 2) navigate('/');
+  if (user === null || user.role < 2) return null;
 
   return (
     <div className="admin-page">

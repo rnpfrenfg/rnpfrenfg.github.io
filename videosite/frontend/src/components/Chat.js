@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { API } from './api';
-import { useAuth } from './context/AuthContext';
+import { API } from '../api';
+import { useAuth } from '../context/AuthContext';
 
 function buildWsUrl(baseHttpUrl, channelid, token) {
   const httpUrl = new URL(baseHttpUrl || window.location.origin);

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { API } from './api';
+import { API } from '../api';
 
 function Signup() {
   const { t } = useTranslation();
