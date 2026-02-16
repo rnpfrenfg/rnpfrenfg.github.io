@@ -62,8 +62,7 @@ function Admin() {
     setUpdatingId(null);
   };
 
-  if (user === null) return null;
-  if (user.role < 2) return null;
+  if (user === null || user.role < 2) navigate('/');
 
   return (
     <div className="admin-page">

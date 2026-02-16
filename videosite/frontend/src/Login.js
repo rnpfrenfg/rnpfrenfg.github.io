@@ -20,9 +20,8 @@ function Login() {
     const result = await API.login(email, password);
     if (result.ok) {
       const data = result.data || {};
-      login(data.user, data.token);
-      setMessage({ type: 'success', text: t('auth.loginSuccess') });
-      setTimeout(() => navigate('/'), 500);
+      login(data.user);
+      navigate('/');
     } else {
       setMessage({ type: 'error', text: result.error || t('errors.LOGIN_FAILED') });
     }

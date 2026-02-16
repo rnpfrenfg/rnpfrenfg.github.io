@@ -3,13 +3,9 @@ import i18n from './i18n';
 
 const baseURL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 
-export const api = axios.create({ baseURL, timeout: 5000 });
-
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+export const api = axios.create({ baseURL, timeout: 5000, withCredentials: true });
+api.defaults.xsrfCookieName = 'XSRF-TOKEN';
+api.defaults.xsrfHeaderName = 'X-XSRF-TOKEN';
 
 function tErrorCode(errorCode, fallbackKey) {
   if (errorCode) {
@@ -74,14 +70,12 @@ function getStoredUser() {
   }
 }
 
-function setAuth(user, token) {
+function setAuth(user) {
   localStorage.setItem('user', JSON.stringify(user));
-  localStorage.setItem('token', token);
 }
 
 function clearAuth() {
   localStorage.removeItem('user');
-  localStorage.removeItem('token');
 }
 
 export const API = {
@@ -157,6 +151,10 @@ export const API = {
 
   updateUserRole(userId, role) {
     return request({ method: 'patch', url: `/api/users/${userId}`, data: { role } }, 'errors.ROLE_UPDATE_FAILED');
+  },
+
+  logout() {
+    return request({ method: 'post', url: '/api/logout' }, 'errors.LOGOUT_FAILED');
   },
 };
 

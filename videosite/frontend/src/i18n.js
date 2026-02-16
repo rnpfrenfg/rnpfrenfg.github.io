@@ -126,7 +126,9 @@ const resources = {
         WS_SESSION_NOT_FOUND: "진행 중인 라이브 세션을 찾을 수 없습니다.",
         WS_CHAT_SEND_FAILED: "채팅 전송에 실패했습니다.",
         WS_CONNECTION_NOT_READY: "채팅 서버 연결이 준비되지 않았습니다. 잠시 후 다시 시도해주세요.",
-        WS_BROADCAST_ENDED: "방송이 종료되었습니다."
+        WS_BROADCAST_ENDED: "방송이 종료되었습니다.",
+        CSRF_INVALID: "보안 토큰이 유효하지 않습니다.",
+        LOGOUT_FAILED: "로그아웃 처리 중 오류가 발생했습니다."
       }
     }
   },
@@ -162,7 +164,9 @@ const resources = {
         WS_CONNECTION_NOT_READY: "Chat connection is not ready. Please try again shortly.",
         WS_BROADCAST_ENDED: "The broadcast has ended.",
         AUTH_REQUIRED: "Login is required.",
-        USER_NOT_FOUND: "User not found."
+        USER_NOT_FOUND: "User not found.",
+        CSRF_INVALID: "Security token is invalid.",
+        LOGOUT_FAILED: "Logout failed."
       }
     }
   }

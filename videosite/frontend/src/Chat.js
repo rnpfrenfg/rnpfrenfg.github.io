@@ -14,20 +14,17 @@ function buildWsUrl(baseHttpUrl, channelid, token) {
   return wsUrl.toString();
 }
 
-function Chat({ channelid }) {
+function useLiveChatSource(channelid) {
   const { t } = useTranslation();
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
-  const [inputText, setInputText] = useState('');
   const [errorText, setErrorText] = useState('');
   const wsRef = useRef(null);
-  const chatEndRef = useRef(null);
 
   useEffect(() => {
     if (!channelid) return;
 
-    const token = localStorage.getItem('token');
-    const wsUrl = buildWsUrl(API.client.defaults.baseURL, channelid, token);
+    const wsUrl = buildWsUrl(API.client.defaults.baseURL, channelid);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     setErrorText('');
@@ -69,59 +66,25 @@ function Chat({ channelid }) {
     };
   }, [channelid, t]);
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleSendMessage = (e) => {
-    e.preventDefault();
-    if (!inputText.trim() || !user) return;
-
+  const send = (text) => {
+    if (!text.trim() || !user) return false;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       setErrorText(t('errors.WS_CONNECTION_NOT_READY'));
-      return;
+      return false;
     }
-
-    wsRef.current.send(JSON.stringify({
-      type: 'chat',
-      message: inputText.trim(),
-    }));
-    setInputText('');
+    wsRef.current.send(JSON.stringify({ type: 'chat', message: text.trim() }));
+    return true;
   };
 
-  return (
-    <div className="chat-container">
-      {errorText && <div className="message message-error chat-error">{errorText}</div>}
-
-      <div className="chat-messages">
-        {messages.map((msg, i) => (
-          <div key={i} className="chat-messageRow">
-            <strong className="chat-username">{msg.username}</strong>:
-            <span className="chat-text">{msg.message}</span>
-          </div>
-        ))}
-        <div ref={chatEndRef} />
-      </div>
-
-      <form onSubmit={handleSendMessage} className="chat-form">
-        {user ? (
-          <div className="chat-inputRow">
-            <input
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder={t('chat.inputPlaceholder')}
-            />
-            <button type="submit">{t('chat.send')}</button>
-          </div>
-        ) : (
-          <p className="chat-loginHint">{t('chat.loginRequired')}</p>
-        )}
-      </form>
-    </div>
-  );
+  return {
+    messages,
+    errorText,
+    canSend: Boolean(user),
+    send,
+  };
 }
 
-function VodChat({ videoId, getCurrentTime }) {
+function useVodChatSource(videoId, getCurrentTime) {
   const { t } = useTranslation();
   const [messages, setMessages] = useState([]);
   const [errorText, setErrorText] = useState('');
@@ -171,25 +134,69 @@ function VodChat({ videoId, getCurrentTime }) {
     return () => clearInterval(timer);
   }, [videoId, getCurrentTime, t]);
 
+  return {
+    messages,
+    errorText,
+    canSend: false,
+    send: null,
+  };
+}
+
+function ChatPanel({ source }) {
+  const { t } = useTranslation();
+  const [inputText, setInputText] = useState('');
+  const chatEndRef = useRef(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [source.messages]);
+
+  const handleSendMessage = (e) => {
+    e.preventDefault();
+    if (!source.canSend || !source.send) return;
+    const ok = source.send(inputText);
+    if (ok) setInputText('');
+  };
+
   return (
     <div className="chat-container">
-      {errorText && <div className="message message-error chat-error">{errorText}</div>}
+      {source.errorText && <div className="message message-error chat-error">{source.errorText}</div>}
 
       <div className="chat-messages">
-        {messages.map((msg, i) => (
+        {source.messages.map((msg, i) => (
           <div key={i} className="chat-messageRow">
             <strong className="chat-username">{msg.username}</strong>:
             <span className="chat-text">{msg.message}</span>
           </div>
         ))}
+        <div ref={chatEndRef} />
       </div>
 
-      <div className="chat-form">
-        <p className="chat-loginHint">{t('chat.vodNotice', { defaultValue: t('chat.systemNotice') })}</p>
-      </div>
+      {source.canSend ? (
+        <form onSubmit={handleSendMessage} className="chat-form">
+          <div className="chat-inputRow">
+            <input
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder={t('chat.inputPlaceholder')}
+            />
+            <button type="submit">{t('chat.send')}</button>
+          </div>
+        </form>
+      ) : null}
     </div>
   );
 }
 
-export { VodChat };
+function Chat({ channelid }) {
+  const source = useLiveChatSource(channelid);
+  return <ChatPanel source={source} />;
+}
+
+function VodChat({ videoId, getCurrentTime }) {
+  const source = useVodChatSource(videoId, getCurrentTime);
+  return <ChatPanel source={source} />;
+}
+
+export { VodChat, useLiveChatSource, useVodChatSource, ChatPanel };
 export default Chat;

@@ -10,12 +10,13 @@ export function AuthProvider({ children }) {
     setUser(API.getStoredUser());
   }, []);
 
-  const login = (userData, token) => {
-    API.setAuth(userData, token);
+  const login = (userData) => {
+    API.setAuth(userData);
     setUser(userData);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await API.logout();
     API.clearAuth();
     setUser(null);
   };

@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const http = require('http');
+const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 const { initDB, createDbPool } = require('./db');
 const { authMiddleware, requireAdmin } = require('./auth');
@@ -106,7 +107,8 @@ let liveThumbScheduler = null;
 startServer();
 
 const app = express();
-app.use(cors());
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:3000';
+app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -127,25 +129,12 @@ function sendSuccess(req, res, code, data = null) {
 }
 function sendFailure(req, res, status, code) {
   const warnLevel = status >= 500 ? 2 : status >= 400 ? 1 : 0;
-  console.log(`[${warnLevel}][${req.method}][${req.originalUrl} ]bad request! at ${req} : ${code}`);
+  console.log(`[${warnLevel}] bad request! code : [${req.method}][${req.originalUrl}] : ${code}`);
   return res.status(status).json({ code });
 }
 
-app.get('/static/js/admin.js', (req, res, next) => {
-  const token = req.headers.authorization;
-  
-  if (!token) return sendFailure(req, res, 401, 'ACCESS_DENIED');
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    if (decoded.role >= 2) {
-      next();
-    } else {
-      sendFailure(req, res, 403, 'FORBIDDEN');
-    }
-  } catch (err) {
-    sendFailure(req, res, 401, 'INVALID_TOKEN');
-  }
+app.get('/static/js/admin.js', authMiddleware, requireAdmin, (req, res, next) => {
+  next();
 });
 
 const debug = true;
@@ -193,6 +182,16 @@ function decodeWsUser(token) {
   }
 }
 
+function parseCookies(header) {
+  if (!header) return {};
+  return header.split(';').reduce((acc, part) => {
+    const [rawKey, ...rest] = part.trim().split('=');
+    if (!rawKey) return acc;
+    acc[rawKey] = decodeURIComponent(rest.join('=') || '');
+    return acc;
+  }, {});
+}
+
 function sendWsError(ws, code, shouldClose = false) {
   ws.send(JSON.stringify({ type: 'error', code }));
   if (shouldClose) {
@@ -224,7 +223,6 @@ async function updateLiveThumbnail(videoId, streamKey) {
   if (state) {
     const now = Date.now();
     state.lastGeneratedAt = now;
-    state.version = now;
   }
   try {
     if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true });
@@ -235,7 +233,7 @@ async function updateLiveThumbnail(videoId, streamKey) {
       if (!fs.existsSync(tmpPath)) return false;
       if (fs.existsSync(thumbPath)) fs.rmSync(thumbPath, { force: true });
       fs.renameSync(tmpPath, thumbPath);
-
+      state.version = now;
       return true;
     });
   } catch (err) {
@@ -590,6 +588,25 @@ app.post('/api/login', async (req, res) => {
       JWT_SECRET,
       { expiresIn: '7d' }
     );
+    const isProd = process.env.NODE_ENV === 'production';
+    const cookieOptions = {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? 'none' : 'lax',
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    };
+    res.cookie('access_token', token, cookieOptions);
+
+    const csrfToken = crypto.randomBytes(32).toString('hex');
+    res.cookie('XSRF-TOKEN', csrfToken, {
+      httpOnly: false,
+      secure: isProd,
+      sameSite: isProd ? 'none' : 'lax',
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+
     sendSuccess(req, res, 'LOGIN_SUCCESS', {
       user: { id: user.id, email: user.email, username: user.username, role: user.role },
       token
@@ -625,6 +642,19 @@ app.post('/api/signup', async (req, res) => {
     console.log('회원가입 오류:', err);
     sendFailure(req, res, 500, 'SIGNUP_FAILED');
   }
+});
+
+app.post('/api/logout', (req, res) => {
+  const isProd = process.env.NODE_ENV === 'production';
+  const clearOptions = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'none' : 'lax',
+    path: '/'
+  };
+  res.clearCookie('access_token', clearOptions);
+  res.clearCookie('XSRF-TOKEN', { ...clearOptions, httpOnly: false });
+  return sendSuccess(req, res, 'LOGOUT_SUCCESS');
 });
 
 async function regenerateStreamKey(channelid){
@@ -713,7 +743,8 @@ wss.on('connection', async (ws, req) => {
   try {
     const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     channelid = requestUrl.searchParams.get('channelid') || '';
-    const token = requestUrl.searchParams.get('token');
+    const cookieToken = parseCookies(req.headers.cookie || '').access_token || '';
+    const token = requestUrl.searchParams.get('token') || cookieToken;
 
     if (!channelid) {
       sendWsError(ws, 'WS_CHANNEL_ID_REQUIRED', true);
