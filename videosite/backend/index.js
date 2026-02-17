@@ -118,7 +118,7 @@ function buildLiveUrl(channelid) {
 }
 
 function getLiveHlsIndexPath(streamKey) {
-  return path.join(MEDIAFOLDER, streamKey, 'index.m3u8');
+  return path.join(LIVEFOLDER, streamKey, 'index.m3u8');
 }
 
 function sendSuccess(req, res, code, data = null) {
@@ -220,8 +220,8 @@ async function updateLiveThumbnail(videoId, streamKey) {
   const tmpPath = `${thumbPath}.tmp.jpg`;
 
   const state = getOrCreateLiveThumbState(id);
+  const now = Date.now();
   if (state) {
-    const now = Date.now();
     state.lastGeneratedAt = now;
   }
   try {
@@ -367,7 +367,7 @@ app.post('/api/recorddone', async (req, res) => {
 
       if (fs.existsSync(flvPath)) fs.unlinkSync(flvPath);
       
-      const hlsFolder = path.join(MEDIAFOLDER, streamKey);
+      const hlsFolder = path.join(VIDEOFOLDER, streamKey);
       if (fs.existsSync(hlsFolder)) {
         fs.rmSync(hlsFolder, { recursive: true, force: true });
       }
