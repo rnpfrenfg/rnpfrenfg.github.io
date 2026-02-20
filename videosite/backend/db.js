@@ -34,17 +34,16 @@ async function initDB(dbPool, dbConfig) {
         title VARCHAR(255),
         filename VARCHAR(255) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (channelid) REFERENCES users(id),
         INDEX (channelid)
       );`);
       await dbPool.query(`
         CREATE TABLE IF NOT EXISTS chats (
           id INT AUTO_INCREMENT PRIMARY KEY,
           username VARCHAR(100) NOT NULL,
-          channelid VARCHAR(100) NOT NULL,
+          channelid INT,
           video_id INT NOT NULL,
           message TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          created_at DATETIME(3) NOT NULL
         )
       `);
       await dbPool.query(`
@@ -64,13 +63,12 @@ async function initDB(dbPool, dbConfig) {
     catch (err) {
         retryCount++;
         console.log(`DB 접속 실패 (시도 ${retryCount}/${maxRetries}): ${err}`);
-        console.log("5초 후 다시 시도합니다...");
         await new Promise(res => setTimeout(res, 5000));
     }
   }
 
   if(!authenticated){
-    console.error("DB 접속 실패. 서버를 가동하지 않습니다.");
+    console.error("DB 접속 실패.");
     process.exit(1);
   }
 }

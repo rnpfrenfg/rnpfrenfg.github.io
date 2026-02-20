@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { API } from '../api';
 import { useAuth } from '../context/AuthContext';
 
+const MAX_CHAT_MESSAGES = 102;
+
 function buildWsUrl(baseHttpUrl, channelid, token) {
   const httpUrl = new URL(baseHttpUrl || window.location.origin);
   const wsProtocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -21,6 +23,10 @@ function useLiveChatSource(channelid) {
   const [errorText, setErrorText] = useState('');
   const wsRef = useRef(null);
 
+  function addMessage(){
+
+  }
+
   useEffect(() => {
     if (!channelid) return;
 
@@ -29,17 +35,27 @@ function useLiveChatSource(channelid) {
     wsRef.current = ws;
     setErrorText('');
 
+    function pushMessage(msg) {
+      setMessages((prev) => {
+        const next = [...prev, msg];
+        if (next.length > MAX_CHAT_MESSAGES) {
+          return next.slice(next.length - MAX_CHAT_MESSAGES);
+        }
+        return next;
+      });
+    }
+
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'chat' && data.message) {
-          setMessages((prev) => [...prev, data.message]);
+          pushMessage(data.message);
           return;
         }
 
         if (data.type === 'system' && data.code) {
           const translated = t(`errors.${data.code}`, { defaultValue: t('chat.systemNotice') });
-          setMessages((prev) => [...prev, { username: t('chat.system'), message: translated }]);
+          pushMessage({ username: t('chat.system'), message: translated });
           return;
         }
 
@@ -90,6 +106,7 @@ function useVodChatSource(videoId, getCurrentTime) {
   const [errorText, setErrorText] = useState('');
   const seenIdsRef = useRef(new Set());
   const lastFetchRef = useRef({ at: -1, ts: 0 });
+  const lastTimeRef = useRef(null);
 
   useEffect(() => {
     seenIdsRef.current = new Set();
@@ -106,11 +123,11 @@ function useVodChatSource(videoId, getCurrentTime) {
 
       const at = Math.max(0, Math.floor(currentTime));
       const now = Date.now();
-      const shouldFetch = at !== lastFetchRef.current.at || (now - lastFetchRef.current.ts) > 3000;
-      if (!shouldFetch) return;
-
+      if (at === lastFetchRef.current.at) return;
       lastFetchRef.current = { at, ts: now };
+
       const result = await API.getVideoChat(videoId, at, 2);
+      console.log(result);
       if (!result.ok) {
         setErrorText(result.error || t('common.serverError'));
         return;

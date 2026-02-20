@@ -9,7 +9,7 @@
     "prestart": "npm run nginx-stop",
     "start": "concurrently --kill-others \"npm run backend\" \"npm run frontend\" \"npm run nginx\"",
     "build": "cd frontend && cross-env BUILD_PATH=../build react-scripts build",
-    "backend": "cd backend && node index.js",
+    "backend": "cd backend && cross-env UV_THREADPOOL_SIZE=24 node index.js",
     "frontend": "cd frontend && npm start",
     "nginx": "cd nginx && nginx.exe",
     "nginx-stop": "taskkill /f /im nginx.exe /t 2>nul || exit 0",

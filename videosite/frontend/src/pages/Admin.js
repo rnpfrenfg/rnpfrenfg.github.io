@@ -5,9 +5,9 @@ import { useAuth } from '../context/AuthContext';
 import { API } from '../api';
 
 const ROLE_LABELS = {
-  1: '1 (\uC77C\uBC18)',
-  2: '2 (\uBAA8\uB354\uB808\uC774\uD130)',
-  3: '3 (\uAD00\uB9AC\uC790)',
+  1: '1 (권한없음)',
+  2: '2 (상담)',
+  3: '3 (관리)',
   4: '4 (root)',
 };
 

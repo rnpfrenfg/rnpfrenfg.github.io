@@ -150,7 +150,7 @@ export const API = {
   },
 
   updateUserRole(userId, role) {
-    return request({ method: 'patch', url: `/api/users/${userId}`, data: { role } }, 'errors.ROLE_UPDATE_FAILED');
+    return request({ method: 'post', url: `/api/users/${userId}`, data: { role } }, 'errors.ROLE_UPDATE_FAILED');
   },
 
   logout() {

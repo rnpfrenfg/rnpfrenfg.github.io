@@ -127,6 +127,7 @@ const resources = {
         WS_CHAT_SEND_FAILED: "채팅 전송에 실패했습니다.",
         WS_CONNECTION_NOT_READY: "채팅 서버 연결이 준비되지 않았습니다. 잠시 후 다시 시도해주세요.",
         WS_BROADCAST_ENDED: "방송이 종료되었습니다.",
+        WS_RATE_LIMIT: "채팅을 너무 자주 보낼 수 없습니다.",
         CSRF_INVALID: "보안 토큰이 유효하지 않습니다.",
         LOGOUT_FAILED: "로그아웃 처리 중 오류가 발생했습니다."
       }
