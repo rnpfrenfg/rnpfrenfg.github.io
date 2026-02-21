@@ -7,7 +7,6 @@ require('dotenv').config();
 const { exec } = require('child_process');
 const path = require('path');
 
-const { initMemoryDB } = require('./memorydb');
 const { createChatBatchWriter } = require('./chatbatch');
 const { startChatServer } = require('./chat');
 const { initDB, createDbPool } = require('./db');
@@ -44,14 +43,14 @@ if(JWT_SECRET == undefined || JWT_SECRET == null){
 const LIVE_THUMB_INTERVAL_MS = 5 * 1000;
 const LIVE_THUMB_REFRESH_MS = 20 * 1000;
 const LIVE_THUMB_WARMUP_MS = 15 * 1000;
-// videoId -> lastGeneratedAt, version, inProgress }
+// videoid -> lastGeneratedAt, version, inProgress
 const liveThumbState = new Map();
 let liveThumbQueue = Promise.resolve();
 let liveThumbScheduler = null;
 
 const NGINX_SERVER = 'http://localhost:8080';
 
-// streamkey -> videoId, startTime,isLive: true
+// streamkey -> videoid, startTime,isLive: true
 const liveSessions = new Map();
 const channelIdToStreamKey = new Map();
 
@@ -65,7 +64,11 @@ const dbConfig = {
   queueLimit: 0
 };
 
-let memorydb;
+const allowedOrigins = new Set();
+allowedOrigins.add(process.env.FRONTEND_ORIGINS);
+allowedOrigins.add("http://localhost");
+allowedOrigins.add("http://localhost:3000");
+
 let dbPool;
 let chatServer;
 
@@ -76,11 +79,15 @@ async function startServer(){
     dbPool = await createDbPool(dbConfig);
     await initDB(dbPool, dbConfig);
     await dbPool.execute('UPDATE livesetting SET is_live = 0 WHERE is_live = 1') // TODO : 처리되지 않은 동영상 파일 처리, video 테이블도 정리
-    memorydb = await initMemoryDB(process.env.REDIS_URL);
-
+    
     const app = express();
-    const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:3000';
-    app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
+    app.use(cors({
+      origin: (origin, cb) => {
+        if (!origin) return cb(null, true);
+        return cb(null, allowedOrigins.has(origin));
+      },
+      credentials: true,
+    }));
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
 
@@ -107,7 +114,6 @@ async function startServer(){
 
     chatServer = await startChatServer(
       server,
-      memorydb,
       liveSessions,
       channelIdToStreamKey,
       chatBatch,
@@ -131,7 +137,7 @@ function addServerAction(app){
     next();
   });
 
-  //from nginx, url(username/filename) to streamkey/filename
+  //from nginx, url(channelid/filename) to streamkey/filename
   app.get('/api/proxy/:channelid/:filename', async (req, res) => {
     const { channelid, filename } = req.params;
     try {
@@ -170,13 +176,12 @@ function addServerAction(app){
       await dbPool.execute('UPDATE livesetting SET is_live = 1 WHERE stream_key = ?', [streamKey]);
       sendSuccess(req, res, 'LIVE_START_AUTH_OK');
 
-      const videoId = result.insertId;
-      liveSessions.set(streamKey, { videoId, startTime: Date.now(), isLive: true });
-      getOrCreateLiveThumbState(videoId);
+      const videoid = result.insertId;
+      liveSessions.set(streamKey, { videoid, startTime: Date.now(), isLive: true });
+      getOrCreateLiveThumbState(videoid);
     }
     catch(err){
-      console.error(err);
-      //TODO check videos, users;
+        sendFailure(req, res, 404, 'LIVE_START_AUTH_NOT_FOUND');
     }
   });
 
@@ -198,9 +203,8 @@ function addServerAction(app){
         const session = liveSessions.get(streamKey);
         if (session) session.isLive = false;
 
-        chatServer.broadcastToChannel(channelid, { type: 'system', code: 'WS_BROADCAST_ENDED' });
+        chatServer.broadcastToChannel(channelid, 'system', 'WS_BROADCAST_ENDED');
         chatServer.closeChannel(channelid);
-        memorydb.closeChat(channelid);
       }
       sendSuccess(req, res, 'LIVE_DONE_OK');
     } catch (err) {
@@ -217,14 +221,14 @@ function addServerAction(app){
     if (!flvPath) return sendFailure(req, res, 400, 'RECORD_DONE_PATH_MISSING');
 
     const session = liveSessions.get(streamKey);
-    const videoId = session?.videoId;
+    const videoid = session?.videoid;
 
-    if(!((Number.isInteger(videoId) && videoId > 0))) {
-      console.warn('[RecordDone] Invalid videoId:', videoId);
+    if(!((Number.isInteger(videoid) && videoid > 0))) {
+      console.warn('[RecordDone] Invalid videoid:', videoid);
       return sendFailure(req, res, 400, 'RECORD_DONE_VIDEO_ID_INVALID');
     }
 
-    const mp4Path = path.join(VIDEOFOLDER, `${videoId}.mp4`);
+    const mp4Path = path.join(VIDEOFOLDER, `${videoid}.mp4`);
     const filename = path.basename(mp4Path);
 
     sendSuccess(req, res, 'RECORD_DONE_STARTED');
@@ -237,10 +241,10 @@ function addServerAction(app){
         if (users.length === 0) {
           return console.warn('[RecordDone] Invalid streamKey:', streamKey);
         }
-        await dbPool.execute('UPDATE videos SET filename = ? WHERE id = ?', [filename, videoId]);
+        await dbPool.execute('UPDATE videos SET filename = ? WHERE id = ?', [filename, videoid]);
         liveSessions.delete(streamKey);
-        liveThumbState.delete(videoId);
-        createMediaThumbnail(videoId);
+        liveThumbState.delete(videoid);
+        createMediaThumbnail(videoid);
 
         if (fs.existsSync(flvPath)) fs.unlinkSync(flvPath);
         
@@ -302,9 +306,9 @@ function addServerAction(app){
   });
 
   app.get('/api/video/info', async (req, res) => {
-    const videoId = req.query.id;
+    const videoid = req.query.id;
     try {
-      const [rows] = await dbPool.query('SELECT * FROM videos WHERE id = ?', [videoId]);
+      const [rows] = await dbPool.query('SELECT * FROM videos WHERE id = ?', [videoid]);
       
       if (rows.length === 0) return sendFailure(req, res, 404, 'VIDEO_NOT_FOUND');
       const video = rows[0];
@@ -320,11 +324,11 @@ function addServerAction(app){
   });
 
   app.get('/api/video/:id/chat', async (req, res) => {
-    const videoId = Number(req.params.id);
+    const videoid = Number(req.params.id);
     const atSeconds = Number(req.query.at);
     const windowSeconds = Number(req.query.window ?? 5);
 
-    if (!Number.isInteger(videoId) || videoId <= 0) {
+    if (!Number.isInteger(videoid) || videoid <= 0) {
       return sendFailure(req, res, 400, 'VIDEO_ID_INVALID');
     }
     if (!Number.isFinite(atSeconds) || atSeconds < 0) {
@@ -336,7 +340,7 @@ function addServerAction(app){
     const toSec = Math.max(0, Math.floor(atSeconds + safeWindow));
 
     try {
-      const [videos] = await dbPool.query('SELECT created_at FROM videos WHERE id = ?', [videoId]);
+      const [videos] = await dbPool.query('SELECT created_at FROM videos WHERE id = ?', [videoid]);
       if (videos.length === 0) return sendFailure(req, res, 404, 'VIDEO_NOT_FOUND');
       const baseTime = videos[0].created_at;
 
@@ -347,7 +351,7 @@ function addServerAction(app){
           AND created_at BETWEEN DATE_ADD(?, INTERVAL ? SECOND) AND DATE_ADD(?, INTERVAL ? SECOND)
         ORDER BY created_at ASC
         LIMIT 200`,
-        [videoId, baseTime, fromSec, baseTime, toSec]
+        [videoid, baseTime, fromSec, baseTime, toSec]
       );
 
       return sendSuccess(req, res, 'VIDEO_CHAT_FETCH_SUCCESS', { messages: rows });
@@ -357,13 +361,13 @@ function addServerAction(app){
     }
   });
   app.get('/thumbnail/:id', async (req, res) => {
-    const videoId = req.params.id;
-    if (!videoId) {
+    const videoid = req.params.id;
+    if (!videoid) {
       return sendFailure(req, res, 400, 'VIDEO_ID_INVALID');
     }
 
     try {
-      const thumbPath = getVideoThumbnailPath(videoId);
+      const thumbPath = getVideoThumbnailPath(videoid);
       if (!fs.existsSync(thumbPath)) return sendFailure(req, res, 404, 'THUMBNAIL_NOT_FOUND');
 
       res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -388,13 +392,13 @@ function addServerAction(app){
           title: "지금 라이브 중!",
           list: lives.map((l) => {
             const session = liveSessions.get(l.stream_key);
-            const videoId = session?.videoId ?? null;
-            const thumbnail = liveThumbState.get(videoId)?.version ?? null;
+            const videoid = session?.videoid ?? null;
+            const thumbnail = liveThumbState.get(videoid)?.version ?? null;
             return {
               title: l.channelname,
               channelid: l.id,
               link: `/live/${l.id}`,
-              thumbnail: (videoId && thumbnail > 0) ? (`/thumbnail/${videoId}?v=${thumbnail}`) : null,
+              thumbnail: (videoid && thumbnail > 0) ? (`/thumbnail/${videoid}?v=${thumbnail}`) : null,
             };
           })
         },
@@ -579,8 +583,8 @@ function sendFailure(req, res, status, code) {
   return res.status(status).json({ code });
 }
 
-function getOrCreateLiveThumbState(videoId) {
-  const id = Number(videoId);
+function getOrCreateLiveThumbState(videoid) {
+  const id = Number(videoid);
   if (!Number.isInteger(id) || id <= 0) return null;
   if (!liveThumbState.has(id)) {
     liveThumbState.set(id, { lastGeneratedAt: 0, version: 0, inProgress: false });
@@ -588,8 +592,8 @@ function getOrCreateLiveThumbState(videoId) {
   return liveThumbState.get(id);
 }
 
-async function updateLiveThumbnail(videoId, streamKey) {
-  const id = Number(videoId);
+async function updateLiveThumbnail(videoid, streamKey) {
+  const id = Number(videoid);
   if (!Number.isInteger(id) || id <= 0) return false;
   if (!streamKey) return false;
 
@@ -633,8 +637,8 @@ function startLiveThumbnailScheduler() {
 
     for (const [streamKey, session] of liveSessions.entries()) {
       if (!session?.isLive) continue;
-      const videoId = session?.videoId;
-      const state = getOrCreateLiveThumbState(videoId);
+      const videoid = session?.videoid;
+      const state = getOrCreateLiveThumbState(videoid);
       if (!state) continue;
       if (state.inProgress) continue;
       if (now - (session?.startTime || 0) < LIVE_THUMB_WARMUP_MS) continue;
@@ -644,7 +648,7 @@ function startLiveThumbnailScheduler() {
       liveThumbQueue = liveThumbQueue
         .then(async () => {
           try {
-            await updateLiveThumbnail(videoId, streamKey);
+            await updateLiveThumbnail(videoid, streamKey);
           } finally {
             state.inProgress = false;
           }
@@ -657,22 +661,22 @@ function startLiveThumbnailScheduler() {
   }, LIVE_THUMB_INTERVAL_MS);
 }
 
-function getVideoThumbnailPath(videoId){
-  return path.join(THUMBNAILFOLDER, `${videoId}.jpg`);
+function getVideoThumbnailPath(videoid){
+  return path.join(THUMBNAILFOLDER, `${videoid}.jpg`);
 }
 
-function getVideoPath(videoId){
-  return path.join(VIDEOFOLDER, `${videoId}.mp4`);
+function getVideoPath(videoid){
+  return path.join(VIDEOFOLDER, `${videoid}.mp4`);
 }
 
-async function createMediaThumbnail(videoId) {
-  const id = Number(videoId);
+async function createMediaThumbnail(videoid) {
+  const id = Number(videoid);
   const thumbPath = getVideoThumbnailPath(id);
 
   if (fs.existsSync(thumbPath)) return thumbPath;
 
   try {
-    const videoPath = getVideoPath(videoId);
+    const videoPath = getVideoPath(videoid);
     if (!fs.existsSync(videoPath)) return null;
 
     exec(`ffmpeg -y -ss 00:00:01 -i "${videoPath}" -frames:v 1 -q:v 2 "${thumbPath}"`, async (error) => {

@@ -23,10 +23,6 @@ function useLiveChatSource(channelid) {
   const [errorText, setErrorText] = useState('');
   const wsRef = useRef(null);
 
-  function addMessage(){
-
-  }
-
   useEffect(() => {
     if (!channelid) return;
 
@@ -53,14 +49,14 @@ function useLiveChatSource(channelid) {
           return;
         }
 
-        if (data.type === 'system' && data.code) {
-          const translated = t(`errors.${data.code}`, { defaultValue: t('chat.systemNotice') });
+        if (data.type === 'system' && data.message) {
+          const translated = t(`errors.${data.message}`, { defaultValue: t('chat.systemNotice') });
           pushMessage({ username: t('chat.system'), message: translated });
           return;
         }
 
-        if (data.type === 'error' && data.code) {
-          const translated = t(`errors.${data.code}`, { defaultValue: t('common.serverError') });
+        if (data.type === 'error' && data.message) {
+          const translated = t(`errors.${data.message}`, { defaultValue: t('common.serverError') });
           setErrorText(translated);
         }
       } catch {

@@ -24,7 +24,7 @@ function createChatBatchWriter(dbPool, flushIntervalMs = 500) {
       const sql = `INSERT INTO chats (video_id, channelid, username, message, created_at) VALUES ?`;
 
       const rows = batchItems.map(c => ([
-        c.videoId,
+        c.videoid,
         c.channelid,
         c.username,
         c.message,
@@ -33,7 +33,7 @@ function createChatBatchWriter(dbPool, flushIntervalMs = 500) {
 
       await dbPool.query(sql, [rows]);
     } catch (err) {
-      console.error("[ChatBatch] flush failed:", err?.code || err?.message || err);
+      console.error("[ChatBatch] flush failed:", err);
     } finally {
       flushing = false;
     }
