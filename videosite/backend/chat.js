@@ -1,4 +1,4 @@
-const { WebSocketServer, WebSocket } = require("ws");
+const { WebSocketServer, WebSocket, Sender } = require("ws");
 const { parseCookies, decodeUserFromToken, COOKIE } = require("./auth");
 const crypto = require("crypto");
 const {initChatAdaptor} = require("./chatAdaptor")
@@ -16,11 +16,13 @@ function broadcastToChannel(channelid, type, payload) {
   const clients = wsChannels.get(channelid || "");
   if (!clients || clients.size === 0) return 0;
 
-  const serialized = JSON.stringify( { type: type, message: payload });
+  const msg = JSON.stringify( { type: type, message: payload });
+  const buf = Buffer.from(msg);
+
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
       try {
-        client.send(serialized);
+        client.send(buf, { binary: false }, () => {});
       } catch {}
     }
   }

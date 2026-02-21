@@ -8,7 +8,7 @@
   "scripts": {
     "prestart": "npm run nginx-stop",
     "start": "concurrently --kill-others \"npm run backend\" \"npm run frontend\" \"npm run nginx\"",
-    "backend": "cd backend && cross-env UV_THREADPOOL_SIZE=24 node index.js",
+    "backend": "cd backend && cross-env UV_THREADPOOL_SIZE=24 node --max-old-space-size=8192 --inspect index.js",
     "frontend": "cd frontend && npm start",
     "nginx": "cd nginx && nginx.exe",
     "nginx-stop": "taskkill /f /im nginx.exe /t 2>nul || exit 0",
@@ -16,7 +16,7 @@
     "fix": "eslint . --fix",
     "check": "eslint . && prettier . --check",
     "build": "cd frontend && cross-env NODE_ENV=production GENERATE_SOURCEMAP=false BUILD_PATH=../build react-scripts build",
-    "backend:prod": "cd backend && cross-env NODE_ENV=production UV_THREADPOOL_SIZE=24 node index.js",
+    "backend:prod": "cd backend && cross-env NODE_ENV=production UV_THREADPOOL_SIZE=24 node --max-old-space-size=8192 index.js index.js",
     "prod": "npm run nginx-stop && npm run build && concurrently --kill-others \"npm run backend:prod\" \"npm run nginx\"",
     "prod:stop": "npm run nginx-stop && taskkill /f /im node.exe /t 2>nul || exit 0"
   },

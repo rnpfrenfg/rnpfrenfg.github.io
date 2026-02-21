@@ -157,31 +157,41 @@ function addServerAction(app){
 
   //from nginx
   app.post('/api/livestartauth', async (req, res) => {
+    const streamKey = req.body.name;
+    let conn;
     try{
-        const streamKey = req.body.name;
+      conn = await dbPool.getConnection();
+      await conn.beginTransaction();
 
-      const [dbres] = await dbPool.execute('SELECT id, channelname FROM livesetting WHERE stream_key = ?', [streamKey]);
-
+      const [dbres] = await conn.execute('SELECT id, channelname FROM livesetting WHERE stream_key = ?', [streamKey]);
       if (dbres.length < 1) {
         sendFailure(req, res, 404, 'LIVE_START_AUTH_NOT_FOUND');
+        try{await conn.rollback();}catch{}
         return;
       }
-
+      
       const channel = dbres[0];
-      channelIdToStreamKey.set(String(channel.id), streamKey);
-      const [result] = await dbPool.execute(
+      const [result] = await conn.execute(
         'INSERT INTO videos (channelid, title) VALUES (?, ?)',
         [channel.id, `${channel.channelname}님의 방송`]
       );
-      await dbPool.execute('UPDATE livesetting SET is_live = 1 WHERE stream_key = ?', [streamKey]);
-      sendSuccess(req, res, 'LIVE_START_AUTH_OK');
+      await conn.execute('UPDATE livesetting SET is_live = 1 WHERE stream_key = ?', [streamKey]);
+      await conn.commit();
 
       const videoid = result.insertId;
+      channelIdToStreamKey.set(String(channel.id), streamKey);
       liveSessions.set(streamKey, { videoid, startTime: Date.now(), isLive: true });
+
       getOrCreateLiveThumbState(videoid);
-    }
-    catch(err){
-        sendFailure(req, res, 404, 'LIVE_START_AUTH_NOT_FOUND');
+      sendSuccess(req, res, 'LIVE_START_AUTH_OK');
+    } catch(err) {
+      if(conn) {
+        try { await conn.rollback(); } catch {}
+      }
+      sendFailure(req, res, 404, 'LIVE_START_AUTH_NOT_FOUND');
+    } finally {
+      if(conn)
+        conn.release();
     }
   });
 
@@ -464,22 +474,35 @@ function addServerAction(app){
     if (password.length < 6) {
       return sendFailure(req, res, 400, 'SIGNUP_PASSWORD_TOO_SHORT');
     }
+
+    let conn;
     try {
+      conn = await dbPool.getConnection()
+      await conn.beginTransaction();
+
       const password_hash = await bcrypt.hash(password, 10);
-      const [result] = await dbPool.execute(
+      const [result] = await conn.execute(
         'INSERT INTO users (email, username, password_hash, role) VALUES (?, ?, ?, 1)',
         [email.trim(), username.trim(), password_hash]
       );
       const userId = result.insertId;
       const stream_key = generateStreamKey(userId);
-      await dbPool.execute('INSERT INTO livesetting (id, channelname, stream_key) VALUES (?, ?, ?)', [userId, username.trim(), stream_key]);
+      await conn.execute('INSERT INTO livesetting (id, channelname, stream_key) VALUES (?, ?, ?)', [userId, username.trim(), stream_key]);
+
+      await conn.commit();
       sendSuccess(req, res, 'SIGNUP_SUCCESS');
     } catch (err) {
+      console.log('회원가입 오류:', err);
       if (err.code === 'ER_DUP_ENTRY') {
         return sendFailure(req, res, 409, 'SIGNUP_DUPLICATE_EMAIL');
       }
-      console.log('회원가입 오류:', err);
       sendFailure(req, res, 500, 'SIGNUP_FAILED');
+
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+      }
+    } finally {
+      conn.release();
     }
   });
 
