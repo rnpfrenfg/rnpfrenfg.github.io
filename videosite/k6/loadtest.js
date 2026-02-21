@@ -42,6 +42,30 @@ function randSuffix() {
   return `${__VU}-${Math.floor(Math.random() * 1e9)}`;
 }
 
+function cookieHeaderFor(url) {
+  const jar = http.cookieJar();
+  const cookies = jar.cookiesForURL(url) || {};
+  const parts = [];
+  for (const [name, value] of Object.entries(cookies)) {
+    if (Array.isArray(value)) {
+      for (const v of value) {
+        if (v != null && String(v) !== '') parts.push(`${name}=${v}`);
+      }
+      continue;
+    }
+    if (value != null && String(value) !== '') parts.push(`${name}=${value}`);
+  }
+  return parts.join('; ');
+}
+
+function hasCookie(url, cookieName) {
+  const jar = http.cookieJar();
+  const cookies = jar.cookiesForURL(url) || {};
+  const value = cookies[cookieName];
+  if (Array.isArray(value)) return value.length > 0 && String(value[0] || '') !== '';
+  return value != null && String(value) !== '';
+}
+
 function parseDurationToMs(s) {
   const m = String(s).trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/i);
   if (!m) return 0;
@@ -73,7 +97,7 @@ function signupAndLoginOrRetry(untilMs) {
       { headers: { 'Content-Type': 'application/json' } }
     );
 
-    if (!check(s, { 'signup 204': (r) => r.status === 204 })) {
+    if (!check(s, { 'signup 200/204': (r) => r.status === 200 || r.status === 204 })) {
       logFail('auth', 'signup_not_204', { status: s.status, body: String(s.body || '').slice(0, 200) });
       sleep(AUTH_RETRY_SLEEP_SEC);
       continue;
@@ -100,23 +124,63 @@ function signupAndLoginOrRetry(untilMs) {
       continue;
     }
 
-    const token = body?.token;
-    if (!token) {
-      logFail('auth', 'login_missing_token', { status: l.status });
+    // Current server authenticates WebSocket via cookies; older versions may return a token field.
+    const token = body?.token || null;
+
+    if (!hasCookie(BASE_URL, 'access_token') && !token) {
+      logFail('auth', 'login_missing_access_token', { status: l.status });
       sleep(AUTH_RETRY_SLEEP_SEC);
       continue;
     }
 
-    return { token, user: body?.user, email };
+    return { token, cookieHeader: cookieHeaderFor(BASE_URL), user: body?.user, email };
   }
 
   return null;
 }
 
 
+let cachedTargetChannelId = null;
+let cachedTargetFetchedAt = 0;
+const TARGET_CHANNEL_REFRESH_MS = 5 * 1000;
+
 function getTargetChannelIdOrRetry() {
   if (LIVE_CHANNEL_ID) return LIVE_CHANNEL_ID;
 
+  const now = Date.now();
+  if (cachedTargetChannelId && now - cachedTargetFetchedAt < TARGET_CHANNEL_REFRESH_MS) {
+    return cachedTargetChannelId;
+  }
+
+  const r = http.get(`${BASE_URL}/api/mainpage`);
+  if (!check(r, { 'mainpage 200': (x) => x.status === 200 })) {
+    logFail('channel', 'mainpage_not_200', { status: r.status, body: String(r.body || '').slice(0, 200) });
+    return null;
+  }
+
+  let json = null;
+  try {
+    json = r.json();
+  } catch {
+    logFail('channel', 'mainpage_json_parse_fail', { status: r.status });
+    return null;
+  }
+
+  const sections = Array.isArray(json?.sections) ? json.sections : [];
+  for (const section of sections) {
+    const list = Array.isArray(section?.list) ? section.list : [];
+    for (const item of list) {
+      const channelid = item?.channelid != null ? String(item.channelid).trim() : '';
+      const link = item?.link != null ? String(item.link) : '';
+      if (channelid && link.startsWith('/live/')) {
+        cachedTargetChannelId = channelid;
+        cachedTargetFetchedAt = now;
+        return channelid;
+      }
+    }
+  }
+
+  return null;
 }
 
 function fetchM3u8(channelid) {
@@ -209,7 +273,7 @@ export function viewerChat() {
     const remainingMs = untilMs - Date.now();
     const sessionMs = Math.min(remainingMs, 60 * 1000);
 
-    const res = ws.connect(wsUrl, {}, (socket) => {
+    const res = ws.connect(wsUrl, { headers:  { Cookie: auth.cookieHeader } }, (socket) => {
       socket.on('open', () => {
         socket.setInterval(() => {
           try {
