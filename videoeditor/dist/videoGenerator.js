@@ -1,5 +1,5 @@
 import { Logger } from "./Logger.js";
-import { ContentType, VideoEffectType } from "./videotrack.js";
+import { ContentType, VideoEffectType, } from "./videotrack.js";
 class CGlContext {
     constructor(canvas) {
         const gl = canvas.getContext('webgl');
@@ -232,19 +232,21 @@ export class VideoGenerator {
                     if (!textCtx) {
                         continue;
                     }
-                    const textSrc = item.content.src;
-                    const measure = textCtx.measureText(item.content.name);
-                    item.content.width = measure.width * fontSize * 1.5;
-                    item.content.height = fontSize * 15;
+                    const textContent = item.content;
+                    const text = textContent.text;
+                    const style = textContent.style;
+                    const measure = textCtx.measureText(text);
+                    textContent.width = measure.width * fontSize * 1.5;
+                    textContent.height = fontSize * 15;
                     textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
-                    textCtx.font = `${textSrc.font}`;
+                    textCtx.font = style.font;
                     textCtx.scale(fontSize, fontSize);
-                    textCtx.fillStyle = textSrc.color;
-                    textCtx.strokeStyle = textSrc.color;
+                    textCtx.fillStyle = style.color;
+                    textCtx.strokeStyle = style.color;
                     textCtx.imageSmoothingEnabled = false;
                     textCtx.textAlign = 'left';
                     textCtx.textBaseline = 'top';
-                    textCtx.fillText(item.content.name, fontSize, fontSize);
+                    textCtx.fillText(text, fontSize, fontSize);
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
                     gl.uniform2f(glContext.positionUniformLocation, item.x, item.y);
@@ -260,11 +262,11 @@ export class VideoGenerator {
                     continue;
                 if (line.type == ContentType.image) {
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, item.content.src);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, item.content.source);
                 }
                 else if (line.type === ContentType.mp4) {
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
-                    const video = item.content.src;
+                    const video = item.content.video;
                     video.currentTime = (now - item.start + item.offset);
                     await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
@@ -277,6 +279,26 @@ export class VideoGenerator {
             }
         }
     }
+    interpolateValue(keyframes, prop, now, defaultValue, targetId) {
+        if (!keyframes.length)
+            return defaultValue;
+        let prev = null;
+        let next = null;
+        for (const kf of keyframes) {
+            if (kf.time <= now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId))
+                prev = kf;
+            if (kf.time > now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId) && !next)
+                next = kf;
+        }
+        if (!prev)
+            return defaultValue;
+        if (!next)
+            return prev[prop];
+        const t = (now - prev.time) / (next.time - prev.time);
+        const prevVal = prev[prop];
+        const nextVal = next[prop];
+        return prevVal + t * (nextVal - prevVal);
+    }
     async mixToOneAudio() {
         const storage = this.storage;
         let audioSampleRate = 0;
@@ -287,7 +309,22 @@ export class VideoGenerator {
             if (track.type === ContentType.audio) {
                 for (const item of track.items) {
                     audioBuffers.push({
-                        buffer: item.content.src,
+                        buffer: item.content.buffer,
+                        start: item.start,
+                        offset: item.offset,
+                        duration: item.duration,
+                    });
+                    audioDuration = Math.max(audioDuration, item.start + item.duration);
+                }
+            }
+            else if (track.type === ContentType.mp4) {
+                for (const item of track.items) {
+                    const mp4 = item.content;
+                    if (mp4.audioBuffer === null)
+                        continue;
+                    Logger.log(String(item), String(mp4.audioBuffer));
+                    audioBuffers.push({
+                        buffer: mp4.audioBuffer,
                         start: item.start,
                         offset: item.offset,
                         duration: item.duration,

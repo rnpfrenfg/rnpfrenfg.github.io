@@ -1,6 +1,15 @@
 import {VideoGenerator} from "./videoGenerator.js";
 import { Logger } from "./Logger.js";
-import {VideoProjectStorage,VideoTrackItem,VideoTrack,ContentType,Content,VideoEffectType, TextSrc, VideoEffect } from "./videotrack.js";
+import { VideoProjectStorage, VideoTrackItem,VideoTrack,
+  ContentType,
+  VideoEffectType,
+  VideoEffect,
+  ImageContent,
+  AudioContent,
+  TextContent,
+  Mp4Content,
+  TextStyle,
+} from "./videotrack.js";
 
 enum PropertyType{
     TrackItem,sidebarItem,trackheader
@@ -216,14 +225,8 @@ document.addEventListener('keydown', async (e: KeyboardEvent) => {
             if(tlNow < trackitem.start || end < tlNow)
                 return;
             
-            const mp3 = storage.FindChild(track, trackitem);
-
             trackitem.duration = tlNow - trackitem.start;
             await storage.addContentToTrack(track.id,trackitem.content,tlNow,end-tlNow,trackitem.x,trackitem.y,trackitem.scale, tlNow - trackitem.start);
-
-            if(mp3 !== null && track.child !== null){
-                mp3.duration = tlNow - trackitem.start;
-            }
 
             videoGenerator.drawImage(tlNow);
             drawStorage(storage);
@@ -283,15 +286,15 @@ function updatePropertiesPanel(id: string, type: PropertyType, isShift: boolean)
             additionalFields = `
                 <div>
                     <label>Font:</label>
-                    <input type="text" value="${item.content.src.font}" data-prop="font">
+                    <input type="text" value="${(item.content as TextContent).style.font}" data-prop="font">
                 </div>
                 <div>
                     <label>Font Size (px):</label>
-                    <input type="number" value="${item.content.src.fontSize}" data-prop="fontSize">
+                    <input type="number" value="${(item.content as TextContent).style.fontSize}" data-prop="fontSize">
                 </div>
                 <div>
                     <label>Color:</label>
-                    <input type="color" value="${item.content.src.color}" data-prop="color">
+                    <input type="color" value="${(item.content as TextContent).style.color}" data-prop="color">
                 </div>
             `;
         }
@@ -438,9 +441,9 @@ function applyPropertyChange() {
         item.y = parseFloat(properties['y']);
         item.scale = parseFloat(properties['scale']);
         if (item.content.type === ContentType.text) {
-            item.content.src.font = properties['font'];
-            item.content.src.fontSize = parseFloat(properties['fontSize']);
-            item.content.src.color = properties['color'];
+            (item.content as TextContent).style.font = properties['font'];
+            (item.content as TextContent).style.fontSize = parseFloat(properties['fontSize']);
+            (item.content as TextContent).style.color = properties['color'];
         }
         item.effect = [];
         const dummyEffect = new VideoEffect(VideoEffectType.DEFAULT);
@@ -511,7 +514,7 @@ async function handleImageInput(file: File) {
         const img = new Image();
         img.src = URL.createObjectURL(file);
         await new Promise(resolve => img.onload = resolve);
-        storage.createContent(ContentType.image, img, file.name, img.naturalWidth,img.naturalHeight);
+        storage.createImageContent(img, file.name, img.naturalWidth, img.naturalHeight);
         drawStorage(storage);
     }
 }
@@ -521,7 +524,7 @@ async function handleAudioInput(file: File) {
         const arrayBuffer = await file.arrayBuffer();
         const audioContext = new AudioContext();
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-        storage.createContent(ContentType.audio,audioBuffer, file.name,0,0);
+        storage.createAudioContent(audioBuffer, file.name);
         drawStorage(storage);
         Logger.log('오디오 파일이 업로드되었습니다.');
     } catch (e) {
@@ -536,7 +539,7 @@ async function handleMp4Input(file: File) {
     const video = document.createElement('video');
     video.src = videoUrl;
     await new Promise(resolve => video.onloadedmetadata = resolve);
-    storage.createContent(ContentType.mp4,video,file.name, video.videoWidth, video.videoHeight);
+    await storage.createMp4Content(video, file.name, video.videoWidth, video.videoHeight);
     drawStorage(storage);
 }
 
@@ -665,8 +668,9 @@ function createVideoTrackDiv(name: string, id: string): HTMLDivElement {
             button.className = 'cyclebutton';
 
             button.addEventListener('click',()=>{
-                let t:TextSrc = {font:'궁서체',fontSize:13, color:'#000000'};
-                let c = storage.createContent(ContentType.text,t,'예시 메시지',storage.getWidth(),3333);
+                let t:TextStyle = {font:'궁서체',fontSize:13, color:'#000000'};
+                const style: TextStyle = { font: t.font, fontSize: t.fontSize, color: t.color };
+                let c = storage.createTextContent('예시 메시지', style, '예시 메시지', storage.getWidth(), 3333);
                 storage.addContentToTrack(track.id,c,tlNow,2,storage.getWidth()/2,storage.getHeight()*4/5,2.5);
                 drawStorage(storage);
                 videoGenerator.drawImage(tlNow);
@@ -718,11 +722,11 @@ function setupDragAndDrop(timeline: HTMLDivElement) {
 
                 let duration = 2;
                 if(content.type == ContentType.audio){
-                    const audioBuffer = content.src as AudioBuffer;
+                    const audioBuffer = (content as AudioContent).buffer;
                     duration=audioBuffer.duration;
                 }
                 else if(content.type == ContentType.mp4){
-                    const video = content.src as HTMLVideoElement;
+                    const video = (content as Mp4Content).video;
                     duration = video.duration;
                 }
 
@@ -753,7 +757,7 @@ function renderVideoTrackItem(content: VideoTrackItem, track: HTMLDivElement) {
         canvas.height = 32;
         const ctx = canvas.getContext('2d')!;
         
-        const audioBuffer = content.content.src as AudioBuffer;
+        const audioBuffer = (content.content as AudioContent).buffer;
         const channelData = audioBuffer.getChannelData(0);
         const samples = Math.min(channelData.length, canvas.width);
         const step = channelData.length / samples;

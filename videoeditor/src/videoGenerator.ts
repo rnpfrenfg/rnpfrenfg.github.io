@@ -1,5 +1,16 @@
 import { Logger } from "./Logger.js";
-import {VideoProjectStorage, Keyframe,VideoTrack, Content,ContentType, TextSrc, VideoEffect, VideoEffectType} from "./videotrack.js";
+import {
+  VideoProjectStorage,
+  Keyframe,
+  VideoTrack,
+  ContentType,
+  VideoEffect,
+  VideoEffectType,
+  ImageContent,
+  TextContent,
+  AudioContent,
+  Mp4Content,
+} from "./videotrack.js";
 
 class CGlContext {
     public gl: WebGLRenderingContext;
@@ -276,20 +287,23 @@ export class VideoGenerator {
                         continue;
                     }
 
-                    const textSrc = item.content.src as TextSrc;
-                    const measure = textCtx.measureText(item.content.name);
-                    item.content.width=measure.width * fontSize*1.5;
-                    item.content.height=fontSize *15;
+                    const textContent = item.content as TextContent;
+                    const text = textContent.text;
+                    const style = textContent.style;
+
+                    const measure = textCtx.measureText(text);
+                    textContent.width = measure.width * fontSize * 1.5;
+                    textContent.height = fontSize * 15;
 
                     textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
-                    textCtx.font = `${textSrc.font}`;
-                    textCtx.scale(fontSize,fontSize);
-                    textCtx.fillStyle = textSrc.color;
-                    textCtx.strokeStyle = textSrc.color;
+                    textCtx.font = style.font;
+                    textCtx.scale(fontSize, fontSize);
+                    textCtx.fillStyle = style.color;
+                    textCtx.strokeStyle = style.color;
                     textCtx.imageSmoothingEnabled = false;
                     textCtx.textAlign = 'left';
                     textCtx.textBaseline = 'top';
-                    textCtx.fillText(item.content.name, fontSize, fontSize);
+                    textCtx.fillText(text, fontSize, fontSize);
 
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
@@ -307,11 +321,11 @@ export class VideoGenerator {
 
                 if(line.type == ContentType.image){
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, item.content.src);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, (item.content as ImageContent).source);
                 }
                 else if(line.type === ContentType.mp4){
                     gl.bindTexture(gl.TEXTURE_2D, glContext.texture);
-                    const video: HTMLVideoElement = item.content.src as HTMLVideoElement;
+                    const video: HTMLVideoElement = (item.content as Mp4Content).video;
                     video.currentTime = (now - item.start + item.offset);
                     await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
@@ -353,7 +367,21 @@ export class VideoGenerator {
             if (track.type === ContentType.audio) {
                 for (const item of track.items) {
                     audioBuffers.push({
-                        buffer: item.content.src as AudioBuffer,
+                        buffer: (item.content as AudioContent).buffer,
+                        start: item.start,
+                        offset: item.offset,
+                        duration: item.duration,
+                    });
+                    audioDuration = Math.max(audioDuration, item.start + item.duration);
+                }
+            }
+            else if (track.type === ContentType.mp4) {
+                for (const item of track.items) {
+                    const mp4 = (item.content as Mp4Content);
+                    if(mp4.audioBuffer === null) continue;
+                    Logger.log(String(item),String(mp4.audioBuffer));
+                    audioBuffers.push({
+                        buffer: mp4.audioBuffer,
                         start: item.start,
                         offset: item.offset,
                         duration: item.duration,
@@ -370,7 +398,6 @@ export class VideoGenerator {
             audioChannels = Math.max(audioChannels,audio.buffer.numberOfChannels);
         }
         let mixedAudioBuffer: AudioBuffer | null = null;
-
         const offlineContext = new OfflineAudioContext(
             audioChannels,
             audioDuration * audioSampleRate,

@@ -8,7 +8,7 @@ export class Logger{
         document.body.appendChild(this.container);
     }
 
-    public static log(...msg: string[]): void{
+    public static log(...msg: any[]): void{
         console.log(...msg);
 
         if (!this.container.parentElement) this.Init();
