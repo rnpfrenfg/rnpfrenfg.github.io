@@ -277,26 +277,6 @@ export class VideoGenerator {
             }
         }
     }
-    interpolateValue(keyframes, prop, now, defaultValue, targetId) {
-        if (!keyframes.length)
-            return defaultValue;
-        let prev = null;
-        let next = null;
-        for (const kf of keyframes) {
-            if (kf.time <= now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId))
-                prev = kf;
-            if (kf.time > now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId) && !next)
-                next = kf;
-        }
-        if (!prev)
-            return defaultValue;
-        if (!next)
-            return prev[prop];
-        const t = (now - prev.time) / (next.time - prev.time);
-        const prevVal = prev[prop];
-        const nextVal = next[prop];
-        return prevVal + t * (nextVal - prevVal);
-    }
     async mixToOneAudio() {
         const storage = this.storage;
         let audioSampleRate = 0;
@@ -351,10 +331,6 @@ export class VideoGenerator {
         const tracks = storage.getTracks();
         const totalVideoDuration = storage.getVideoEndTime();
         const fps = storage.getFPS();
-        if (!Number.isFinite(fps) || fps <= 0) {
-            Logger.log('Invalid FPS; cannot create video.');
-            return null;
-        }
         const functionStartTime = Date.now();
         this.resize(width, height);
         if (tracks.length === 0) {
@@ -412,17 +388,14 @@ export class VideoGenerator {
         videoEncoder.configure(encoderConfig);
         Logger.log('이미지 처리 시작');
         let lastLogTime = Date.now();
-        const frameDurationUs = Math.max(1, Math.round(1000000 / fps));
-        const totalMicroseconds = Math.max(frameDurationUs, Math.round(totalVideoDuration * 1000000));
+        const totalMicroseconds = totalVideoDuration * 1000000;
         let frameCount = 0;
         //draw
-        for (let timestampUs = 0; timestampUs < totalMicroseconds; timestampUs += frameDurationUs) {
-            const remainingUs = totalMicroseconds - timestampUs;
-            const durationUs = Math.max(1, Math.min(frameDurationUs, remainingUs));
-            await this._drawImage(this.offscreenGlContext, timestampUs / 1000000);
+        for (let timestamp = 0; timestamp < totalVideoDuration * 1000000; timestamp += 1000000 / fps) {
+            await this._drawImage(this.offscreenGlContext, timestamp / 1000000);
             const frame = new VideoFrame(this.offscreenCanvas, {
-                timestamp: timestampUs,
-                duration: durationUs,
+                timestamp: timestamp,
+                duration: fps,
             });
             frameCount++;
             videoEncoder.encode(frame, { keyFrame: frameCount % 2 == 1 });
@@ -430,10 +403,14 @@ export class VideoGenerator {
             const currentTime = Date.now();
             if (currentTime - lastLogTime >= 2000) {
                 if (onProgress)
-                    onProgress((timestampUs / totalMicroseconds) * 100);
+                    onProgress((timestamp / totalMicroseconds) * 100);
                 lastLogTime = currentTime;
             }
         }
+        //draw :: final frame // for some video player
+        const frame = new VideoFrame(this.offscreenCanvas, { timestamp: totalVideoDuration * 1000000, duration: 0 });
+        videoEncoder.encode(frame, { keyFrame: true });
+        frame.close();
         await videoEncoder.flush();
         Logger.log('사운드 처리 시작');
         //audio

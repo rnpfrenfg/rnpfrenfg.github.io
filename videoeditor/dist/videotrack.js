@@ -25,7 +25,6 @@ export class VideoTrack {
         this.type = type;
         this.items = [];
         this.child = null;
-        this.keyframes = [];
     }
     getEndtime() {
         return this.items.reduce((max, item) => Math.max(max, item.start + item.duration), 0);
@@ -49,19 +48,6 @@ export class VideoProjectStorage {
         let track = new VideoTrack(id, type, name);
         this.tracks.push(track);
         return track;
-    }
-    addTrackKeyframe(trackId, keyframe) {
-        const track = this.getVideoTrack(trackId);
-        if (track) {
-            track.keyframes.push(keyframe);
-            track.keyframes.sort((a, b) => a.time - b.time);
-        }
-    }
-    removeTrackKeyframe(trackId, time) {
-        const track = this.getVideoTrack(trackId);
-        if (track) {
-            track.keyframes = track.keyframes.filter(kf => kf.time !== time);
-        }
     }
     createContent(type, src, name, width, height) {
         const id = this.createUID();
@@ -87,7 +73,7 @@ export class VideoProjectStorage {
             return;
         if (track.type != con.type)
             return;
-        track.items.push({ content: con, start: start, id: this.createUID(), duration, x, y, scale, effect: [], offset, keyframes: [] });
+        track.items.push({ content: con, start: start, id: this.createUID(), duration, x, y, scale, effect: [], offset });
         if (track.type == ContentType.mp4) {
             if (track.child == null)
                 track.child = this.createTrack(ContentType.audio, 'mp4/audio');
@@ -98,7 +84,7 @@ export class VideoProjectStorage {
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
             const child = track.child;
             const content = this.createContent(ContentType.audio, audioBuffer, con.name + '/audio', 0, 0);
-            child.items.push({ content, start: start, id: this.createUID(), duration, x, y, scale, effect: [], offset, keyframes: [] });
+            child.items.push({ content, start: start, id: this.createUID(), duration, x, y, scale, effect: [], offset });
         }
     }
     FindChild(track, target) {
