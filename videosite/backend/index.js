@@ -289,29 +289,93 @@ function addServerAction(app){
 
   app.get('/api/channel/videos', async (req, res) => {
       const channelid = req.query.channelid;
-      const page = parseInt(req.query.page) || 1; 
-      const limit = 10; 
-      const offset = (page - 1) * limit;
+      const cursor = parseInt(req.query.lastid) || 0; 
+      const limit = 10;
 
       try {
-          const [videos] = await dbPool.query(
-              'SELECT id, title, created_at FROM videos WHERE channelid = ? AND filename IS NOT NULL ORDER BY created_at DESC LIMIT ? OFFSET ?',
-              [channelid, limit, offset]
-          );
+          const params = [channelid];
+          let sql = 'SELECT id, title, created_at FROM videos WHERE channelid = ? AND filename IS NOT NULL';
+          if (cursor > 0) {
+            sql += ' AND id < ?';
+            params.push(cursor);
+          }
+          sql += ' ORDER BY id DESC LIMIT ?';
+          params.push(limit + 1);
 
-          const [totalCount] = await dbPool.query(
-              'SELECT COUNT(*) as count FROM videos WHERE channelid = ? AND filename IS NOT NULL',
-              [channelid]
-          );
+          let [videos] = await dbPool.query(sql, params);
+
+          let hasMore = false;
+          if(videos.length > limit){
+            hasMore = true;
+            videos = videos.slice(0,limit);
+          }
+          const lastid = videos.length ? videos[videos.length - 1].id : 0;
 
           sendSuccess(req, res, 'CHANNEL_VIDEOS_FETCH_SUCCESS', {
               videos,
-              currentPage: page,
-              totalPages: Math.max(1, Math.ceil(Number(totalCount?.[0]?.count ?? 0) / limit))
+              lastid,
+              hasMore
           });
       } catch (err) {
           sendFailure(req, res, 500, 'CHANNEL_VIDEOS_FETCH_FAILED');
           console.log(err);
+      }
+  });
+
+  app.get('/api/channel/posts', async (req, res) => {
+      const channelid = req.query.channelid;
+      const cursor = parseInt(req.query.lastid) || 0; 
+      const limit = 10;
+
+      try {
+          const params = [channelid];
+          let sql = 'SELECT id, post, created_at FROM posts WHERE channelid = ?';
+          if (cursor > 0) {
+            sql += ' AND id < ?';
+            params.push(cursor);
+          }
+          sql += ' ORDER BY id DESC LIMIT ?';
+          params.push(limit + 1);
+
+          let [posts] = await dbPool.query(sql, params);
+
+          let hasMore = false;
+          if(posts.length > limit){
+            hasMore = true;
+            posts = posts.slice(0,limit);
+          }
+          const lastid = posts.length ? posts[posts.length - 1].id : 0;
+
+          sendSuccess(req, res, 'CHANNEL_POSTS_FETCH_SUCCESS', {
+              posts,
+              lastid,
+              hasMore
+          });
+      } catch (err) {
+          sendFailure(req, res, 500, 'CHANNEL_POSTS_FETCH_FAILED');
+          console.log(err);
+      }
+  });
+
+  app.post('/api/channel/writepost', authMiddleware, async (req, res) => {
+      const channelid = Number(req.body?.channelid);
+      const text = typeof req.body?.post === 'string' ? req.body.post.trim() : '';
+
+      if (!Number.isInteger(channelid) || channelid <= 0) {
+        return sendFailure(req, res, 400, 'CHANNEL_ID_REQUIRED');
+      }
+      if (!text) return sendFailure(req, res, 400, 'POST_CONTENT_REQUIRED');
+      if (text.length > 5000) return sendFailure(req, res, 400, 'POST_CONTENT_TOO_LONG');
+      if (!req.user || Number(req.user.id) !== channelid) {
+        return sendFailure(req, res, 403, 'POST_FORBIDDEN');
+      }
+
+      try {
+        await dbPool.execute('INSERT INTO posts (channelid, post) VALUES (?, ?)', [channelid, text]);
+        return sendSuccess(req, res, 'POST_WRITE_SUCCESS');
+      } catch (err) {
+        console.error(err);
+        return sendFailure(req, res, 500, 'POST_WRITE_FAILED');
       }
   });
 

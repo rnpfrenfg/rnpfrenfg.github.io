@@ -396,6 +396,29 @@ a {
   background: #f3f3f3;
 }
 
+.ch-communityComposer {
+  margin-bottom: var(--space-2);
+}
+
+.ch-communityComposerBox {
+  margin-top: var(--space-2);
+  border: var(--border);
+  border-radius: var(--radius-2);
+  padding: var(--space-2);
+  background: var(--bg);
+}
+
+.ch-communityComposerTextarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.ch-communityComposerActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}
+
 .about-section {
   text-align: left;
 }

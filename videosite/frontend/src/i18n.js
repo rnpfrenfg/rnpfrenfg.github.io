@@ -32,6 +32,8 @@ const resources = {
         offline: "현재는 방송 중이 아닙니다. 이전에 업로드된 영상을 확인해 보세요.",
         extra: "다시보기, 클립, 등",
         communityPlaceholder: "채널 게시판(커뮤니티) 공간입니다.",
+        noVideos: "업로드된 동영상이 없습니다.",
+        noPosts: "게시글이 없습니다.",
         infoTitle: "채널 정보",
         name: "채널 이름",
         joinedAt: "가입일"
@@ -112,6 +114,12 @@ const resources = {
         CHANNEL_NOT_FOUND: "채널을 찾을 수 없습니다.",
         CHANNEL_INFO_FETCH_FAILED: "채널 정보를 불러오지 못했습니다.",
         CHANNEL_VIDEOS_FETCH_FAILED: "비디오 목록을 불러오지 못했습니다.",
+        CHANNEL_POSTS_FETCH_FAILED: "게시글 목록을 불러오지 못했습니다.",
+        CHANNEL_ID_REQUIRED: "채널 정보가 필요합니다.",
+        POST_CONTENT_REQUIRED: "내용을 입력해주세요.",
+        POST_CONTENT_TOO_LONG: "내용이 너무 깁니다.",
+        POST_FORBIDDEN: "게시글을 작성할 권한이 없습니다.",
+        POST_WRITE_FAILED: "게시글 작성에 실패했습니다.",
         VIDEO_NOT_FOUND: "비디오를 찾을 수 없습니다.",
         VIDEO_INFO_FETCH_FAILED: "비디오 정보를 불러오지 못했습니다.",
         MAINPAGE_FETCH_FAILED: "메인 정보를 불러오지 못했습니다.",
@@ -148,6 +156,10 @@ const resources = {
         loading: "Loading...",
         serverError: "A server error occurred."
       },
+      channel: {
+        noVideos: "No videos yet.",
+        noPosts: "No posts yet."
+      },
       chat: {
         inputPlaceholder: "Type a message.",
         send: "Send",
@@ -166,6 +178,13 @@ const resources = {
         WS_BROADCAST_ENDED: "The broadcast has ended.",
         AUTH_REQUIRED: "Login is required.",
         USER_NOT_FOUND: "User not found.",
+        CHANNEL_POSTS_FETCH_FAILED: "Failed to fetch posts.",
+        CHANNEL_VIDEOS_FETCH_FAILED: "Failed to fetch videos.",
+        CHANNEL_ID_REQUIRED: "Channel id is required.",
+        POST_CONTENT_REQUIRED: "Please enter content.",
+        POST_CONTENT_TOO_LONG: "Content is too long.",
+        POST_FORBIDDEN: "You are not allowed to write posts for this channel.",
+        POST_WRITE_FAILED: "Failed to write post.",
         CSRF_INVALID: "Security token is invalid.",
         LOGOUT_FAILED: "Logout failed."
       }

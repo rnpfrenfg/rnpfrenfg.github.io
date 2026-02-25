@@ -34,7 +34,8 @@ async function initDB(dbPool, dbConfig) {
         title VARCHAR(255),
         filename VARCHAR(255) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX (channelid)
+        INDEX(channelid),
+        INDEX(id)
       );`);
       await dbPool.query(`
         CREATE TABLE IF NOT EXISTS chats (
@@ -43,7 +44,8 @@ async function initDB(dbPool, dbConfig) {
           channelid INT,
           video_id INT NOT NULL,
           message TEXT NOT NULL,
-          created_at DATETIME(3) NOT NULL
+          created_at DATETIME(3) NOT NULL,
+          INDEX(created_at)
         )
       `);
       await dbPool.query(`
@@ -52,8 +54,17 @@ async function initDB(dbPool, dbConfig) {
           is_live TINYINT(1) DEFAULT 0,
           channelname VARCHAR(100) NOT NULL,
           stream_key VARCHAR(255) UNIQUE NULL,
-          INDEX(id),
           INDEX(stream_key)
+        )
+      `);
+      await dbPool.query(`
+        CREATE TABLE IF NOT EXISTS posts (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          channelid INT NOT NULL,
+          post TEXT NOT NULL,
+          image_key VARCHAR(255) NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          INDEX(channelid, id)
         )
       `);
 

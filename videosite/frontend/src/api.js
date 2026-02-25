@@ -96,10 +96,24 @@ export const API = {
     return request({ method: 'get', url: `/api/channel/info/${channelid}` }, 'errors.CHANNEL_INFO_FETCH_FAILED');
   },
 
-  getChannelVideos(channelid, page = 1) {
+  getChannelVideos(channelid, lastid = 0) {
     return request(
-      { method: 'get', url: '/api/channel/videos', params: { channelid, page } },
+      { method: 'get', url: '/api/channel/videos', params: { channelid, lastid } },
       'errors.CHANNEL_VIDEOS_FETCH_FAILED'
+    );
+  },
+
+  getChannelPosts(channelid, lastid = 0) {
+    return request(
+      { method: 'get', url: '/api/channel/posts', params: { channelid, lastid } },
+      'errors.CHANNEL_POSTS_FETCH_FAILED'
+    );
+  },
+
+  writeChannelPost(channelid, post) {
+    return request(
+      { method: 'post', url: '/api/channel/writepost', data: { channelid, post } },
+      'errors.POST_WRITE_FAILED'
     );
   },
 

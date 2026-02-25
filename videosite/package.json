@@ -10,7 +10,7 @@
     "start": "concurrently --kill-others \"npm run backend\" \"npm run frontend\" \"npm run nginx\"",
     "backend": "cd backend && cross-env UV_THREADPOOL_SIZE=24 node --max-old-space-size=8192 --inspect index.js",
     "frontend": "cd frontend && npm start",
-    "nginx": "cd nginx && nginx.exe",
+    "nginx": "cd nginx && (if not exist logs mkdir logs) && (if not exist temp mkdir temp) && nginx.exe",
     "nginx-stop": "taskkill /f /im nginx.exe /t 2>nul || exit 0",
     "lint": "eslint .",
     "fix": "eslint . --fix",
