@@ -1,4 +1,5 @@
 import { Logger } from "./Logger.js";
+import * as MP4Box from "./lib/mp4box.all.js";
 import { ContentType, VideoEffectType, } from "./videotrack.js";
 class CGlContext {
     constructor(canvas) {
@@ -279,26 +280,6 @@ export class VideoGenerator {
             }
         }
     }
-    interpolateValue(keyframes, prop, now, defaultValue, targetId) {
-        if (!keyframes.length)
-            return defaultValue;
-        let prev = null;
-        let next = null;
-        for (const kf of keyframes) {
-            if (kf.time <= now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId))
-                prev = kf;
-            if (kf.time > now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId) && !next)
-                next = kf;
-        }
-        if (!prev)
-            return defaultValue;
-        if (!next)
-            return prev[prop];
-        const t = (now - prev.time) / (next.time - prev.time);
-        const prevVal = prev[prop];
-        const nextVal = next[prop];
-        return prevVal + t * (nextVal - prevVal);
-    }
     async mixToOneAudio() {
         const storage = this.storage;
         let audioSampleRate = 0;
@@ -361,149 +342,338 @@ export class VideoGenerator {
         this.offscreenGlContext.setViewport(this.storage.getWidth(), this.storage.getHeight());
         this.dbGlContext.setViewport(this.storage.getWidth(), this.storage.getHeight());
     }
-    async createVideo(onProgress) {
-        const storage = this.storage;
-        const width = storage.getWidth();
-        const height = storage.getHeight();
-        const tracks = storage.getTracks();
-        const totalVideoDuration = storage.getVideoEndTime();
-        const fps = storage.getFPS();
-        const functionStartTime = Date.now();
-        this.resize(width, height);
-        if (tracks.length === 0) {
-            Logger.log('컨텐츠를 먼저 업로드하세요.');
+    async createVideo(onProgress, abortSignal) {
+        if (!this.isWorkerExportSupported()) {
+            Logger.log("Worker/WebCodecs export path unavailable.");
             return null;
         }
-        Logger.log('영상 생성 중');
-        const mixedAudio = await this.mixToOneAudio();
-        let audioSampleRate = 0;
-        let audioChannels = 0;
-        let audioBitrate = 128000;
-        if (mixedAudio !== null) {
-            audioSampleRate = mixedAudio.sampleRate;
-            audioChannels = mixedAudio.numberOfChannels;
-        }
-        //init
-        const muxerOptions = {
-            target: new Mp4Muxer.ArrayBufferTarget(),
-            video: {
-                codec: 'avc',
-                width: width,
-                height: height,
-            },
-            fastStart: 'in-memory',
-        };
-        if (mixedAudio !== null) {
-            muxerOptions.audio = {
-                codec: 'aac',
-                numberOfChannels: audioChannels,
-                sampleRate: audioSampleRate,
-            };
-        }
-        const muxer = new Mp4Muxer.Muxer(muxerOptions);
-        const videoEncoder = new VideoEncoder({
-            output: (chunk, meta) => {
-                muxer.addVideoChunk(chunk, meta);
-            },
-            error: (e) => {
-                Logger.log('비디오 인코딩 에러:', e.message);
-            },
-        });
-        const encoderConfig = {
-            codec: 'avc1.42001f',
-            width: width,
-            height: height,
-            framerate: fps,
-            bitrate: 8000000,
-            hardwareAcceleration: 'prefer-hardware'
-        };
-        const support = await VideoEncoder.isConfigSupported(encoderConfig);
-        if (!support.supported) {
-            Logger.log('비디오 코덱이 지원되지 않습니다!');
-            return null;
-        }
-        videoEncoder.configure(encoderConfig);
-        Logger.log('이미지 처리 시작');
-        let lastLogTime = Date.now();
-        const totalMicroseconds = totalVideoDuration * 1000000;
-        let frameCount = 0;
-        //draw
-        for (let timestamp = 0; timestamp < totalVideoDuration * 1000000; timestamp += 1000000 / fps) {
-            await this._drawImage(this.offscreenGlContext, timestamp / 1000000);
-            const frame = new VideoFrame(this.offscreenCanvas, {
-                timestamp: timestamp,
-                duration: fps,
-            });
-            frameCount++;
-            videoEncoder.encode(frame, { keyFrame: frameCount % 2 == 1 });
-            frame.close();
-            const currentTime = Date.now();
-            if (currentTime - lastLogTime >= 2000) {
+        try {
+            const { dto, transferables } = await this.buildWorkerProjectDto();
+            const mp4Buffer = await this.runExportWorker(dto, transferables, (p) => {
                 if (onProgress)
-                    onProgress((timestamp / totalMicroseconds) * 100);
-                lastLogTime = currentTime;
-            }
+                    onProgress(Math.max(0, Math.min(100, p)), "worker");
+            }, abortSignal);
+            if (onProgress)
+                onProgress(100, "encode");
+            return new Blob([mp4Buffer], { type: "video/mp4" });
         }
-        //draw :: final frame // for some video player
-        const frame = new VideoFrame(this.offscreenCanvas, { timestamp: totalVideoDuration * 1000000, duration: 0 });
-        videoEncoder.encode(frame, { keyFrame: true });
-        frame.close();
-        await videoEncoder.flush();
-        Logger.log('사운드 처리 시작');
-        //audio
-        if (mixedAudio) {
-            const audioEncoder = new AudioEncoder({
-                output: (chunk, meta) => {
-                    muxer.addAudioChunk(chunk, meta);
-                },
-                error: (e) => {
-                    Logger.log('오디오 인코딩 에러:', e.message);
-                },
-            });
-            const audioConfig = {
-                codec: 'mp4a.40.2',
-                numberOfChannels: audioChannels,
-                sampleRate: audioSampleRate,
-                bitrate: audioBitrate,
-            };
-            const audioSupport = await AudioEncoder.isConfigSupported(audioConfig);
-            if (!audioSupport.supported) {
-                Logger.log('오디오 코덱이 지원되지 않습니다!');
-                return null;
-            }
-            audioEncoder.configure(audioConfig);
-            const numberOfFrames = mixedAudio.length;
-            const channelData = new Float32Array(numberOfFrames * audioChannels);
-            for (let i = 0; i < audioChannels; i++) {
-                const channel = mixedAudio.getChannelData(i);
-                for (let j = 0; j < numberOfFrames; j++) {
-                    channelData[j * audioChannels + i] = j < channel.length ? channel[j] : 0;
-                }
-            }
-            const audioData = new AudioData({
-                format: 'f32',
-                sampleRate: audioSampleRate,
-                numberOfFrames,
-                numberOfChannels: audioChannels,
-                timestamp: 0,
-                data: channelData,
-            });
-            audioEncoder.encode(audioData);
-            audioData.close();
-            await audioEncoder.flush();
-        }
-        //
-        muxer.finalize();
-        videoEncoder.close();
-        const buffer = muxerOptions.target.buffer;
-        if (!buffer) {
-            Logger.log('비디오 생성 실패: 출력 버퍼가 비어 있습니다.');
+        catch (error) {
+            Logger.log("Worker export failed:", error.message);
             return null;
         }
-        const blob = new Blob([buffer], { type: 'video/mp4' });
-        if (onProgress)
-            onProgress(100);
-        Logger.log(`영상 생성 완료! 소요시간 ${(Date.now() - functionStartTime) / 1000}s`);
-        return blob;
+    }
+    isWorkerExportSupported() {
+        return (typeof Worker !== "undefined" &&
+            typeof OffscreenCanvas !== "undefined" &&
+            typeof VideoEncoder !== "undefined");
+    }
+    async ensureVideoMetadata(video) {
+        if (video.readyState >= 1 && Number.isFinite(video.duration))
+            return;
+        await new Promise((resolve, reject) => {
+            const onLoaded = () => {
+                cleanup();
+                resolve();
+            };
+            const onError = () => {
+                cleanup();
+                reject(new Error("Failed to load video metadata."));
+            };
+            const cleanup = () => {
+                video.removeEventListener("loadedmetadata", onLoaded);
+                video.removeEventListener("error", onError);
+            };
+            video.addEventListener("loadedmetadata", onLoaded, { once: true });
+            video.addEventListener("error", onError, { once: true });
+        });
+    }
+    extractMp4Descriptions(bytes) {
+        return new Promise((resolve) => {
+            const mp4File = MP4Box.createFile();
+            let resolved = false;
+            const findBoxPayload = (buffer, boxType) => {
+                const data = new DataView(buffer);
+                const typeBytes = new Uint8Array(4);
+                for (let i = 0; i + 8 <= data.byteLength; i++) {
+                    typeBytes[0] = data.getUint8(i + 0);
+                    typeBytes[1] = data.getUint8(i + 1);
+                    typeBytes[2] = data.getUint8(i + 2);
+                    typeBytes[3] = data.getUint8(i + 3);
+                    const type = String.fromCharCode(...typeBytes);
+                    if (type !== boxType)
+                        continue;
+                    const size = data.getUint32(i - 4, false);
+                    if (size < 8)
+                        continue;
+                    const start = i + 4;
+                    const end = (i - 4) + size;
+                    if (end > data.byteLength || start >= end)
+                        continue;
+                    return buffer.slice(start, end);
+                }
+                return undefined;
+            };
+            const toArrayBuffer = (value) => {
+                if (!value)
+                    return undefined;
+                if (value instanceof ArrayBuffer)
+                    return value;
+                if (value instanceof Uint8Array) {
+                    const copy = new Uint8Array(value.byteLength);
+                    copy.set(value);
+                    return copy.buffer;
+                }
+                if (value.data)
+                    return toArrayBuffer(value.data);
+                if (value.buffer instanceof ArrayBuffer)
+                    return value.buffer;
+                return undefined;
+            };
+            const trackDescriptionFromInfo = (trackInfo) => {
+                const candidates = [
+                    trackInfo?.description,
+                    trackInfo?.avcC,
+                    trackInfo?.hvcC,
+                    trackInfo?.vpcC,
+                    trackInfo?.av1C,
+                    trackInfo?.esds?.data,
+                ];
+                for (const candidate of candidates) {
+                    const buffer = toArrayBuffer(candidate);
+                    if (buffer)
+                        return buffer;
+                }
+                return undefined;
+            };
+            const findTrackEntry = (trackId) => {
+                const traks = mp4File?.moov?.traks;
+                if (!Array.isArray(traks))
+                    return null;
+                for (const trak of traks) {
+                    const id = trak?.tkhd?.track_id ?? trak?.tkhd?.trackId;
+                    if (id !== trackId)
+                        continue;
+                    const entries = trak?.mdia?.minf?.stbl?.stsd?.entries;
+                    if (Array.isArray(entries) && entries.length > 0) {
+                        return entries[0];
+                    }
+                }
+                return null;
+            };
+            mp4File.onError = () => {
+                if (resolved)
+                    return;
+                resolved = true;
+                resolve({});
+            };
+            mp4File.onReady = (info) => {
+                const readyVideoTrack = info.videoTracks?.[0] || null;
+                const readyAudioTrack = info.audioTracks?.[0] || null;
+                const videoEntry = readyVideoTrack ? findTrackEntry(readyVideoTrack.id) : null;
+                const audioEntry = readyAudioTrack ? findTrackEntry(readyAudioTrack.id) : null;
+                const videoDescription = trackDescriptionFromInfo(readyVideoTrack) ||
+                    trackDescriptionFromInfo(videoEntry);
+                if (resolved)
+                    return;
+                resolved = true;
+                const fallbackVideoDescription = videoDescription ?? findBoxPayload(bytes, "avcC");
+                if (!videoDescription && fallbackVideoDescription) {
+                    Logger.log(`Mp4 avcC extracted from raw bytes: ${fallbackVideoDescription.byteLength} bytes`);
+                }
+                resolve({
+                    videoDescription: fallbackVideoDescription,
+                });
+            };
+            const copy = bytes.slice(0);
+            copy.fileStart = 0;
+            mp4File.appendBuffer(copy);
+            mp4File.flush();
+        });
+    }
+    async buildWorkerProjectDto() {
+        const transferables = [];
+        const imageAssets = [];
+        const textAssets = [];
+        const mp4Assets = [];
+        const audioAssets = [];
+        for (const content of this.storage.getContents()) {
+            if (content.type === ContentType.image) {
+                const imageContent = content;
+                const bitmap = await createImageBitmap(imageContent.source);
+                imageAssets.push({
+                    id: imageContent.id,
+                    name: imageContent.name,
+                    width: imageContent.width,
+                    height: imageContent.height,
+                    bitmap,
+                });
+                transferables.push(bitmap);
+                continue;
+            }
+            if (content.type === ContentType.text) {
+                const textContent = content;
+                textAssets.push({
+                    id: textContent.id,
+                    name: textContent.name,
+                    width: textContent.width,
+                    height: textContent.height,
+                    text: textContent.text,
+                    style: {
+                        font: textContent.style.font,
+                        fontSize: textContent.style.fontSize,
+                        color: textContent.style.color,
+                    },
+                });
+                continue;
+            }
+            if (content.type === ContentType.mp4) {
+                const mp4Content = content;
+                const video = mp4Content.video;
+                await this.ensureVideoMetadata(video);
+                let bytes;
+                try {
+                    const response = await fetch(video.currentSrc || video.src);
+                    bytes = await response.arrayBuffer();
+                }
+                catch (error) {
+                    Logger.log("Mp4 fetch failed:", error.message);
+                    continue;
+                }
+                const { videoDescription } = await this.extractMp4Descriptions(bytes);
+                mp4Assets.push({
+                    id: mp4Content.id,
+                    name: mp4Content.name,
+                    width: mp4Content.width,
+                    height: mp4Content.height,
+                    bytes,
+                    videoDescription,
+                });
+                transferables.push(bytes);
+                continue;
+            }
+            if (content.type === ContentType.audio) {
+                const audioContent = content;
+                const channels = [];
+                for (let channelIndex = 0; channelIndex < audioContent.buffer.numberOfChannels; channelIndex++) {
+                    const channelData = audioContent.buffer.getChannelData(channelIndex);
+                    const copy = new Float32Array(channelData.length);
+                    copy.set(channelData);
+                    channels.push(copy.buffer);
+                    transferables.push(copy.buffer);
+                }
+                audioAssets.push({
+                    id: audioContent.id,
+                    name: audioContent.name,
+                    sampleRate: audioContent.buffer.sampleRate,
+                    numberOfChannels: audioContent.buffer.numberOfChannels,
+                    length: audioContent.buffer.length,
+                    channels,
+                });
+            }
+        }
+        const tracks = this.storage.getTracks().map((track) => ({
+            id: track.id,
+            name: track.name,
+            type: track.type,
+            items: track.items.map((item) => ({
+                id: item.id,
+                contentId: item.content.id,
+                start: item.start,
+                duration: item.duration,
+                offset: item.offset,
+                x: item.x,
+                y: item.y,
+                scale: item.scale,
+                effects: item.effect.map((effect) => ({
+                    type: effect.type,
+                    intensity: Number(effect.intensity ?? 1),
+                    range: Number(effect.range ?? 1),
+                })),
+            })),
+        }));
+        const dto = {
+            width: this.storage.getWidth(),
+            height: this.storage.getHeight(),
+            fps: this.storage.getFPS(),
+            duration: this.storage.getVideoEndTime(),
+            tracks,
+            images: imageAssets,
+            texts: textAssets,
+            mp4s: mp4Assets,
+            audios: audioAssets,
+        };
+        return { dto, transferables };
+    }
+    runExportWorker(dto, transferables, onProgress, abortSignal) {
+        return new Promise((resolve, reject) => {
+            const worker = new Worker(new URL("./videoGenerator.worker.js", import.meta.url), { type: "module" });
+            const teardown = () => worker.terminate();
+            let settled = false;
+            const rejectOnce = (error) => {
+                if (settled)
+                    return;
+                settled = true;
+                teardown();
+                reject(error);
+            };
+            const resolveOnce = (buffer) => {
+                if (settled)
+                    return;
+                settled = true;
+                teardown();
+                resolve(buffer);
+            };
+            const onAbort = () => {
+                const cancelMessage = { type: "cancel" };
+                worker.postMessage(cancelMessage);
+                rejectOnce(new Error("Export canceled"));
+            };
+            worker.onmessage = (event) => {
+                const message = event.data;
+                if (!message)
+                    return;
+                if (message.type === "debug") {
+                    Logger.log(`Worker: ${message.message}`);
+                    return;
+                }
+                if (message.type === "progress") {
+                    if (onProgress)
+                        onProgress(message.progress);
+                    return;
+                }
+                if (message.type === "done") {
+                    if (abortSignal)
+                        abortSignal.removeEventListener("abort", onAbort);
+                    resolveOnce(message.buffer);
+                    return;
+                }
+                if (message.type === "error") {
+                    if (abortSignal)
+                        abortSignal.removeEventListener("abort", onAbort);
+                    rejectOnce(new Error(message.message));
+                }
+            };
+            worker.onerror = (event) => {
+                if (abortSignal)
+                    abortSignal.removeEventListener("abort", onAbort);
+                const where = `${event.filename || "worker"}:${event.lineno || 0}:${event.colno || 0}`;
+                const msg = event.message ? `${event.message} @ ${where}` : `Export worker crashed @ ${where}`;
+                rejectOnce(new Error(msg));
+            };
+            worker.onmessageerror = () => {
+                if (abortSignal)
+                    abortSignal.removeEventListener("abort", onAbort);
+                rejectOnce(new Error("Worker message deserialization failed (onmessageerror). Check transferables/structured clone."));
+            };
+            if (abortSignal) {
+                if (abortSignal.aborted) {
+                    onAbort();
+                    return;
+                }
+                abortSignal.addEventListener("abort", onAbort, { once: true });
+            }
+            const startMessage = { type: "start", project: dto };
+            worker.postMessage(startMessage, transferables);
+        });
     }
 }

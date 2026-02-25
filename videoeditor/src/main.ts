@@ -546,9 +546,11 @@ async function handleMp4Input(file: File) {
 async function createVideo(){
     stopPlayback();
 
+    const functionStartTime = Date.now();
+
     createVideoButton.disabled = true;
     showProgressModal();
-    const blob = await videoGenerator.createVideo((progress) => updateProgress(progress));
+    const blob = await videoGenerator.createVideo((progress, stage) => updateProgress(progress, stage));
     if(blob == null){
         Logger.log('영상 생성 실패');
         hideProgressModal();
@@ -560,14 +562,26 @@ async function createVideo(){
     downloadLink.style.display = 'inline-block';
     hideProgressModal();
     createVideoButton.disabled = false;
+    Logger.log(`영상 생성 완료! 소요시간 ${(Date.now() - functionStartTime)/1000}s`);
 }
 
-function updateProgress(progress: number) {
+function updateProgress(progress: number, stage?: "worker" | "encode") {
     const progressBar = document.getElementById('progress-bar') as HTMLDivElement;
     const progressText = document.getElementById('progress-text') as HTMLDivElement;
+    const progressTitle = document.querySelector('#progress-modal h2') as HTMLHeadingElement | null;
     if (progressBar && progressText) {
         progressBar.style.width = `${progress}%`;
-        progressText.textContent = `${Math.round(progress)}%`;
+        const rounded = Math.round(progress);
+        if (stage === "worker") {
+            if (progressTitle) progressTitle.textContent = '합성/인코딩 중..';
+            progressText.textContent = `합성 ${rounded}%`;
+        } else if (stage === "encode") {
+            if (progressTitle) progressTitle.textContent = '인코딩 중..';
+            progressText.textContent = `${rounded}%`;
+        } else {
+            if (progressTitle) progressTitle.textContent = '영상 생성 중..';
+            progressText.textContent = `${rounded}%`;
+        }
     }
 }
 

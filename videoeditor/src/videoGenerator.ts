@@ -1,8 +1,8 @@
 import { Logger } from "./Logger.js";
+import * as MP4Box from "./lib/mp4box.all.js";
+
 import {
   VideoProjectStorage,
-  Keyframe,
-  VideoTrack,
   ContentType,
   VideoEffect,
   VideoEffectType,
@@ -11,6 +11,131 @@ import {
   AudioContent,
   Mp4Content,
 } from "./videotrack.js";
+
+type ExportProgressStage = "worker" | "encode";
+type ExportProgressCallback = (progress: number, stage?: ExportProgressStage) => void;
+
+interface WorkerTextStyleDto {
+    font: string;
+    fontSize: number;
+    color: string;
+}
+
+interface WorkerEffectDto {
+    type: string;
+    intensity: number;
+    range: number;
+}
+
+interface WorkerTrackItemDto {
+    id: string;
+    contentId: string;
+    start: number;
+    duration: number;
+    offset: number;
+    x: number;
+    y: number;
+    scale: number;
+    effects: WorkerEffectDto[];
+}
+
+interface WorkerTrackDto {
+    id: string;
+    name: string;
+    type: ContentType;
+    items: WorkerTrackItemDto[];
+}
+
+interface WorkerImageAssetDto {
+    id: string;
+    name: string;
+    width: number;
+    height: number;
+    bitmap: ImageBitmap;
+}
+
+interface WorkerTextAssetDto {
+    id: string;
+    name: string;
+    width: number;
+    height: number;
+    text: string;
+    style: WorkerTextStyleDto;
+}
+
+interface WorkerMp4AssetDto {
+    id: string;
+    name: string;
+    width: number;
+    height: number;
+    bytes: ArrayBuffer;
+    videoDescription?: ArrayBuffer;
+}
+
+interface WorkerAudioAssetDto {
+    id: string;
+    name: string;
+    sampleRate: number;
+    numberOfChannels: number;
+    length: number;
+    channels: ArrayBuffer[];
+}
+
+interface WorkerMixedAudioDto {
+    sampleRate: number;
+    numberOfChannels: number;
+    length: number;
+    channels: ArrayBuffer[];
+}
+
+interface WorkerProjectDto {
+    width: number;
+    height: number;
+    fps: number;
+    duration: number;
+    tracks: WorkerTrackDto[];
+    images: WorkerImageAssetDto[];
+    texts: WorkerTextAssetDto[];
+    mp4s: WorkerMp4AssetDto[];
+    mixedAudio?: WorkerMixedAudioDto;
+}
+
+interface WorkerStartMessage {
+    type: "start";
+    project: WorkerProjectDto;
+}
+
+interface WorkerCancelMessage {
+    type: "cancel";
+}
+
+type WorkerInMessage = WorkerStartMessage | WorkerCancelMessage;
+
+interface WorkerReadyMessage {
+    type: "ready";
+}
+
+interface WorkerProgressMessage {
+    type: "progress";
+    progress: number;
+}
+
+interface WorkerDoneMessage {
+    type: "done";
+    buffer: ArrayBuffer;
+}
+
+interface WorkerErrorMessage {
+    type: "error";
+    message: string;
+}
+
+interface WorkerDebugMessage {
+    type: "debug";
+    message: string;
+}
+
+type WorkerOutMessage = WorkerReadyMessage | WorkerProgressMessage | WorkerDoneMessage | WorkerErrorMessage | WorkerDebugMessage;
 
 class CGlContext {
     public gl: WebGLRenderingContext;
@@ -340,22 +465,6 @@ export class VideoGenerator {
         }
     }
 
-    private interpolateValue(keyframes: Keyframe[], prop: keyof Keyframe, now: number, defaultValue: number, targetId?: string): number {
-        if (!keyframes.length) return defaultValue;
-        let prev: Keyframe | null = null;
-        let next: Keyframe | null = null;
-        for (const kf of keyframes) {
-            if (kf.time <= now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId)) prev = kf;
-            if (kf.time > now && kf[prop] !== undefined && (!targetId || kf.targetId === targetId) && !next) next = kf;
-        }
-        if (!prev) return defaultValue;
-        if (!next) return prev[prop] as number;
-        const t = (now - prev.time) / (next.time - prev.time);
-        const prevVal = prev[prop] as number;
-        const nextVal = next[prop] as number;
-        return prevVal + t * (nextVal - prevVal);
-    }
-
     public async mixToOneAudio() : Promise<AudioBuffer | null>{
         const storage = this.storage;
         let audioSampleRate = 0;
@@ -428,165 +537,361 @@ export class VideoGenerator {
         this.dbGlContext.setViewport(this.storage.getWidth(), this.storage.getHeight());
     }
 
-    public async createVideo(onProgress?: (progress: number) => void): Promise<Blob | null> {
-        const storage = this.storage;
-        const width = storage.getWidth();
-        const height = storage.getHeight();
-        const tracks = storage.getTracks();
-        const totalVideoDuration = storage.getVideoEndTime();
-        const fps = storage.getFPS();
-
-        const functionStartTime = Date.now();
-
-        this.resize(width, height);
-        if (tracks.length === 0) {
-            Logger.log('컨텐츠를 먼저 업로드하세요.');
+    public async createVideo(onProgress?: ExportProgressCallback, abortSignal?: AbortSignal): Promise<Blob | null> {
+        if (!this.isWorkerExportSupported()) {
+            Logger.log("Worker/WebCodecs export path unavailable.");
             return null;
         }
-        Logger.log('영상 생성 중');
+
+        try {
+            const { dto, transferables } = await this.buildWorkerProjectDto();
+            const mp4Buffer = await this.runExportWorker(
+                dto,
+                transferables,
+                (p) => {
+                    if (onProgress) onProgress(Math.max(0, Math.min(100, p)), "worker");
+                },
+                abortSignal
+            );
+            if (onProgress) onProgress(100, "encode");
+            return new Blob([mp4Buffer], { type: "video/mp4" });
+        } catch (error) {
+            Logger.log("Worker export failed:", (error as Error).message);
+            return null;
+        }
+    }
+
+    private isWorkerExportSupported(): boolean {
+        return (
+            typeof Worker !== "undefined" &&
+            typeof OffscreenCanvas !== "undefined" &&
+            typeof VideoEncoder !== "undefined"
+        );
+    }
+
+    private async ensureVideoMetadata(video: HTMLVideoElement): Promise<void> {
+        if (video.readyState >= 1 && Number.isFinite(video.duration)) return;
+        await new Promise<void>((resolve, reject) => {
+            const onLoaded = () => {
+                cleanup();
+                resolve();
+            };
+            const onError = () => {
+                cleanup();
+                reject(new Error("Failed to load video metadata."));
+            };
+            const cleanup = () => {
+                video.removeEventListener("loadedmetadata", onLoaded);
+                video.removeEventListener("error", onError);
+            };
+            video.addEventListener("loadedmetadata", onLoaded, { once: true });
+            video.addEventListener("error", onError, { once: true });
+        });
+    }
+
+    private extractMp4Descriptions(bytes: ArrayBuffer): Promise<{ videoDescription?: ArrayBuffer }> {
+        return new Promise((resolve) => {
+            const mp4File = MP4Box.createFile();
+            let resolved = false;
+
+            const findBoxPayload = (buffer: ArrayBuffer, boxType: string): ArrayBuffer | undefined => {
+                const data = new DataView(buffer);
+                const typeBytes = new Uint8Array(4);
+                for (let i = 0; i + 8 <= data.byteLength; i++) {
+                    typeBytes[0] = data.getUint8(i + 0);
+                    typeBytes[1] = data.getUint8(i + 1);
+                    typeBytes[2] = data.getUint8(i + 2);
+                    typeBytes[3] = data.getUint8(i + 3);
+                    const type = String.fromCharCode(...typeBytes);
+                    if (type !== boxType) continue;
+                    const size = data.getUint32(i - 4, false);
+                    if (size < 8) continue;
+                    const start = i + 4;
+                    const end = (i - 4) + size;
+                    if (end > data.byteLength || start >= end) continue;
+                    return buffer.slice(start, end);
+                }
+                return undefined;
+            };
+
+            const toArrayBuffer = (value: any): ArrayBuffer | undefined => {
+                if (!value) return undefined;
+                if (value instanceof ArrayBuffer) return value;
+                if (value instanceof Uint8Array) {
+                    const copy = new Uint8Array(value.byteLength);
+                    copy.set(value);
+                    return copy.buffer;
+                }
+                if (value.data) return toArrayBuffer(value.data);
+                if (value.buffer instanceof ArrayBuffer) return value.buffer;
+                return undefined;
+            };
+
+            const trackDescriptionFromInfo = (trackInfo: any): ArrayBuffer | undefined => {
+                const candidates = [
+                    trackInfo?.description,
+                    trackInfo?.avcC,
+                    trackInfo?.hvcC,
+                    trackInfo?.vpcC,
+                    trackInfo?.av1C,
+                    trackInfo?.esds?.data,
+                ];
+                for (const candidate of candidates) {
+                    const buffer = toArrayBuffer(candidate);
+                    if (buffer) return buffer;
+                }
+                return undefined;
+            };
+
+            const findTrackEntry = (trackId: number): any | null => {
+                const traks = (mp4File as any)?.moov?.traks;
+                if (!Array.isArray(traks)) return null;
+                for (const trak of traks) {
+                    const id = trak?.tkhd?.track_id ?? trak?.tkhd?.trackId;
+                    if (id !== trackId) continue;
+                    const entries = trak?.mdia?.minf?.stbl?.stsd?.entries;
+                    if (Array.isArray(entries) && entries.length > 0) {
+                        return entries[0];
+                    }
+                }
+                return null;
+            };
+
+            mp4File.onError = () => {
+                if (resolved) return;
+                resolved = true;
+                resolve({});
+            };
+
+            mp4File.onReady = (info: any) => {
+                const readyVideoTrack = info.videoTracks?.[0] || null;
+                const readyAudioTrack = info.audioTracks?.[0] || null;
+                const videoEntry = readyVideoTrack ? findTrackEntry(readyVideoTrack.id) : null;
+                const audioEntry = readyAudioTrack ? findTrackEntry(readyAudioTrack.id) : null;
+                const videoDescription =
+                    trackDescriptionFromInfo(readyVideoTrack) ||
+                    trackDescriptionFromInfo(videoEntry);
+                if (resolved) return;
+                resolved = true;
+                const fallbackVideoDescription = videoDescription ?? findBoxPayload(bytes, "avcC");
+                if (!videoDescription && fallbackVideoDescription) {
+                    Logger.log(`Mp4 avcC extracted from raw bytes: ${fallbackVideoDescription.byteLength} bytes`);
+                }
+                resolve({
+                    videoDescription: fallbackVideoDescription,
+                });
+            };
+
+            const copy = bytes.slice(0) as any;
+            copy.fileStart = 0;
+            mp4File.appendBuffer(copy);
+            mp4File.flush();
+        });
+    }
+
+
+    private async buildWorkerProjectDto(): Promise<{ dto: WorkerProjectDto; transferables: Transferable[] }> {
+        const transferables: Transferable[] = [];
+        const imageAssets: WorkerImageAssetDto[] = [];
+        const textAssets: WorkerTextAssetDto[] = [];
+        const mp4Assets: WorkerMp4AssetDto[] = [];
+        let mixedAudioAsset: WorkerMixedAudioDto | undefined;
 
         const mixedAudio = await this.mixToOneAudio();
-        let audioSampleRate = 0;
-        let audioChannels = 0;
-        let audioBitrate = 128000;
-        if(mixedAudio !== null){
-            audioSampleRate=mixedAudio.sampleRate;
-            audioChannels=mixedAudio.numberOfChannels;
-        }
-
-        //init
-        const muxerOptions: any = {
-            target: new Mp4Muxer.ArrayBufferTarget(),
-            video: {
-                codec: 'avc',
-                width: width,
-                height: height,
-            },
-            fastStart: 'in-memory',
-        };
-        if(mixedAudio !== null){
-            muxerOptions.audio = {
-                codec: 'aac',
-                numberOfChannels: audioChannels,
-                sampleRate: audioSampleRate,
-            };
-        }
-
-        const muxer = new Mp4Muxer.Muxer(muxerOptions);
-
-        const videoEncoder = new VideoEncoder({
-            output: (chunk: EncodedVideoChunk, meta: any) => {
-                muxer.addVideoChunk(chunk, meta);
-            },
-            error: (e: Error) => {
-                Logger.log('비디오 인코딩 에러:', e.message);
-            },
-        });
-
-        const encoderConfig: VideoEncoderConfig = {
-            codec: 'avc1.42001f',
-            width: width,
-            height: height,
-            framerate: fps,
-            bitrate: 8_000_000,
-            hardwareAcceleration: 'prefer-hardware'
-        };
-        const support = await VideoEncoder.isConfigSupported(encoderConfig);
-        if (!support.supported) {
-            Logger.log('비디오 코덱이 지원되지 않습니다!');
-            return null;
-        }
-        videoEncoder.configure(encoderConfig);
-
-        Logger.log('이미지 처리 시작');
-        let lastLogTime = Date.now();
-        const totalMicroseconds = totalVideoDuration * 1_000_000;
-        let frameCount = 0;
-        //draw
-        for(let timestamp=0; timestamp < totalVideoDuration*1_000_000; timestamp+=1_000_000/fps){
-            await this._drawImage(this.offscreenGlContext, timestamp/1_000_000);
-            const frame = new VideoFrame(this.offscreenCanvas, {
-                timestamp: timestamp,
-                duration: fps,
-            });
-            frameCount++;
-            videoEncoder.encode(frame, { keyFrame: frameCount%2==1 });
-            frame.close();
-
-            const currentTime = Date.now();
-            if (currentTime - lastLogTime >= 2000) {
-                if (onProgress) onProgress((timestamp / totalMicroseconds) * 100);
-                lastLogTime = currentTime;
-            }
-        }
-
-        //draw :: final frame // for some video player
-        const frame = new VideoFrame(this.offscreenCanvas, { timestamp:totalVideoDuration*1_000_000, duration: 0 });
-        videoEncoder.encode(frame, { keyFrame: true });
-        frame.close();
-
-        await videoEncoder.flush();
-
-        Logger.log('사운드 처리 시작');
-        //audio
         if (mixedAudio) {
-            const audioEncoder = new AudioEncoder({
-                output: (chunk: EncodedAudioChunk, meta: any) => {
-                    muxer.addAudioChunk(chunk, meta);
-                },
-                error: (e: Error) => {
-                    Logger.log('오디오 인코딩 에러:', e.message);
-                },
-            });
-
-            const audioConfig: AudioEncoderConfig = {
-                codec: 'mp4a.40.2',
-                numberOfChannels: audioChannels,
-                sampleRate: audioSampleRate,
-                bitrate: audioBitrate,
+            const channels: ArrayBuffer[] = [];
+            for (let channelIndex = 0; channelIndex < mixedAudio.numberOfChannels; channelIndex++) {
+                const channelData = mixedAudio.getChannelData(channelIndex);
+                const copy = new Float32Array(channelData.length);
+                copy.set(channelData);
+                channels.push(copy.buffer);
+                transferables.push(copy.buffer);
+            }
+            mixedAudioAsset = {
+                sampleRate: mixedAudio.sampleRate,
+                numberOfChannels: mixedAudio.numberOfChannels,
+                length: mixedAudio.length,
+                channels,
             };
-            const audioSupport = await AudioEncoder.isConfigSupported(audioConfig);
-            if (!audioSupport.supported) {
-                Logger.log('오디오 코덱이 지원되지 않습니다!');
-                return null;
+        }
+
+        for (const content of this.storage.getContents()) {
+            if (content.type === ContentType.image) {
+                const imageContent = content as ImageContent;
+                const bitmap = await createImageBitmap(imageContent.source as ImageBitmapSource);
+                imageAssets.push({
+                    id: imageContent.id,
+                    name: imageContent.name,
+                    width: imageContent.width,
+                    height: imageContent.height,
+                    bitmap,
+                });
+                transferables.push(bitmap);
+                continue;
             }
-            audioEncoder.configure(audioConfig);
-            
-            const numberOfFrames = mixedAudio.length;
-            const channelData = new Float32Array(numberOfFrames * audioChannels);
-            for (let i = 0; i < audioChannels; i++) {
-                const channel = mixedAudio.getChannelData(i);
-                for (let j = 0; j < numberOfFrames; j++) {
-                    channelData[j * audioChannels + i] = j < channel.length ? channel[j] : 0;
+
+            if (content.type === ContentType.text) {
+                const textContent = content as TextContent;
+                textAssets.push({
+                    id: textContent.id,
+                    name: textContent.name,
+                    width: textContent.width,
+                    height: textContent.height,
+                    text: textContent.text,
+                    style: {
+                        font: textContent.style.font,
+                        fontSize: textContent.style.fontSize,
+                        color: textContent.style.color,
+                    },
+                });
+                continue;
+            }
+
+            if (content.type === ContentType.mp4) {
+                const mp4Content = content as Mp4Content;
+                const video = mp4Content.video;
+                await this.ensureVideoMetadata(video);
+                let bytes: ArrayBuffer;
+                try {
+                    const response = await fetch(video.currentSrc || video.src);
+                    bytes = await response.arrayBuffer();
+                } catch (error) {
+                    Logger.log("Mp4 fetch failed:", (error as Error).message);
+                    continue;
                 }
+                const { videoDescription } = await this.extractMp4Descriptions(bytes);
+                mp4Assets.push({
+                    id: mp4Content.id,
+                    name: mp4Content.name,
+                    width: mp4Content.width,
+                    height: mp4Content.height,
+                    bytes,
+                    videoDescription,
+                });
+                transferables.push(bytes);
+                continue;
             }
-            const audioData = new AudioData({
-                format: 'f32',
-                sampleRate: audioSampleRate,
-                numberOfFrames,
-                numberOfChannels: audioChannels,
-                timestamp: 0,
-                data: channelData,
-            });
-            audioEncoder.encode(audioData);
-            audioData.close();
 
-            await audioEncoder.flush();
         }
 
-        //
-        muxer.finalize();
-        videoEncoder.close();
+        const tracks: WorkerTrackDto[] = this.storage.getTracks().map((track) => ({
+            id: track.id,
+            name: track.name,
+            type: track.type,
+            items: track.items.map((item) => ({
+                id: item.id,
+                contentId: item.content.id,
+                start: item.start,
+                duration: item.duration,
+                offset: item.offset,
+                x: item.x,
+                y: item.y,
+                scale: item.scale,
+                effects: item.effect.map((effect) => ({
+                    type: effect.type,
+                    intensity: Number(effect.intensity ?? 1),
+                    range: Number(effect.range ?? 1),
+                })),
+            })),
+        }));
 
-        const buffer = muxerOptions.target.buffer;
-        if (!buffer) {
-            Logger.log('비디오 생성 실패: 출력 버퍼가 비어 있습니다.');
-            return null;
-        }
+        const dto: WorkerProjectDto = {
+            width: this.storage.getWidth(),
+            height: this.storage.getHeight(),
+            fps: this.storage.getFPS(),
+            duration: this.storage.getVideoEndTime(),
+            tracks,
+            images: imageAssets,
+            texts: textAssets,
+            mp4s: mp4Assets,
+            mixedAudio: mixedAudioAsset,
+        };
 
-        const blob = new Blob([buffer], { type: 'video/mp4' });
-        if (onProgress) onProgress(100);
-        Logger.log(`영상 생성 완료! 소요시간 ${(Date.now() - functionStartTime)/1000}s`);
-        return blob;
+        return { dto, transferables };
+    }
+
+    private runExportWorker(
+        dto: WorkerProjectDto,
+        transferables: Transferable[],
+        onProgress?: ExportProgressCallback,
+        abortSignal?: AbortSignal
+    ): Promise<ArrayBuffer> {
+        return new Promise<ArrayBuffer>((resolve, reject) => {
+            const worker = new Worker(
+                new URL("./videoGenerator.worker.js", import.meta.url),
+                { type: "module" }
+            );
+            const teardown = () => worker.terminate();
+            let settled = false;
+
+            const rejectOnce = (error: Error) => {
+                if (settled) return;
+                settled = true;
+                teardown();
+                reject(error);
+            };
+
+            const resolveOnce = (buffer: ArrayBuffer) => {
+                if (settled) return;
+                settled = true;
+                teardown();
+                resolve(buffer);
+            };
+
+            const onAbort = () => {
+                const cancelMessage: WorkerInMessage = { type: "cancel" };
+                worker.postMessage(cancelMessage);
+                rejectOnce(new Error("Export canceled"));
+            };
+
+            worker.onmessage = (event: MessageEvent<WorkerOutMessage>) => {
+                const message = event.data;
+                if (!message) return;
+
+                if (message.type === "debug") {
+                    Logger.log(`Worker: ${message.message}`);
+                    return;
+                }
+
+                if (message.type === "progress") {
+                    if (onProgress) onProgress(message.progress);
+                    return;
+                }
+
+                if (message.type === "done") {
+                    if (abortSignal) abortSignal.removeEventListener("abort", onAbort);
+                    resolveOnce(message.buffer);
+                    return;
+                }
+
+                if (message.type === "error") {
+                    if (abortSignal) abortSignal.removeEventListener("abort", onAbort);
+                    rejectOnce(new Error(message.message));
+                }
+            };
+
+            worker.onerror = (event: ErrorEvent) => {
+                if (abortSignal) abortSignal.removeEventListener("abort", onAbort);
+                const where = `${event.filename || "worker"}:${event.lineno || 0}:${event.colno || 0}`;
+                const msg = event.message ? `${event.message} @ ${where}` : `Export worker crashed @ ${where}`;
+                rejectOnce(new Error(msg));
+            };
+
+            worker.onmessageerror = () => {
+                if (abortSignal) abortSignal.removeEventListener("abort", onAbort);
+                rejectOnce(new Error("Worker message deserialization failed (onmessageerror). Check transferables/structured clone."));
+            };
+
+            if (abortSignal) {
+                if (abortSignal.aborted) {
+                    onAbort();
+                    return;
+                }
+                abortSignal.addEventListener("abort", onAbort, { once: true });
+            }
+
+            const startMessage: WorkerInMessage = { type: "start", project: dto };
+            worker.postMessage(startMessage, transferables);
+        });
     }
 }
